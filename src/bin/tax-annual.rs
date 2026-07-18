@@ -28,9 +28,25 @@ fn run() -> Result<(), String> {
     let tax = annual_tax(table, income, column)
         .ok_or_else(|| format!("unsupported tax table: {table}"))?;
 
-    println!("Preliminary annual tax: {} SEK", tax.total);
-    println!("Taxable income:         {} SEK", tax.taxable_income);
-    println!("Basic allowance:        {} SEK", tax.basic_allowance);
+    println!("assessed_income: {} SEK", tax.assessed_income);
+    println!("basic_allowance: {} SEK", tax.basic_allowance);
+    println!("taxable_income: {} SEK", tax.taxable_income);
+    println!("state_income_tax: {} SEK", tax.state_income_tax);
+    println!("municipal_income_tax: {} SEK", tax.municipal_income_tax);
+    println!(
+        "burial_and_religious_fee: {} SEK",
+        tax.burial_and_religious_fee
+    );
+    println!("pension_fee: {} SEK", tax.pension_fee);
+    println!("pension_fee_credit: {} SEK", tax.pension_fee_credit);
+    println!("work_income_credit: {} SEK", tax.work_income_credit);
+    println!(
+        "sickness_compensation_credit: {} SEK",
+        tax.sickness_compensation_credit
+    );
+    println!("earned_income_credit: {} SEK", tax.earned_income_credit);
+    println!("public_service_fee: {} SEK", tax.public_service_fee);
+    println!("total: {} SEK", tax.total);
     Ok(())
 }
 

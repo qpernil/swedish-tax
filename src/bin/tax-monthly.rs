@@ -32,8 +32,14 @@ fn run() -> Result<(), String> {
         .ok_or_else(|| format!("unsupported tax table: {table}"))?;
 
     match deduction {
-        TaxDeduction::Amount(amount) => println!("Monthly deduction: {amount} SEK"),
-        TaxDeduction::Percent(percent) => println!("Monthly deduction rate: {percent}.00%"),
+        TaxDeduction::Amount(amount) => {
+            println!("kind: amount");
+            println!("amount: {amount} SEK");
+        }
+        TaxDeduction::Percent(percent) => {
+            println!("kind: percent");
+            println!("percent: {percent}.00%");
+        }
     }
     Ok(())
 }
