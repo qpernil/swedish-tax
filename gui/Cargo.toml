@@ -1,0 +1,9 @@
+[package]
+name = "swedish-tax-gui"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+eframe = { version = "0.35.0", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
+swedish-tax = { path = ".." }

@@ -15,6 +15,19 @@ cargo run --bin tax-monthly -- 34 1 18000
 
 Arguments are tax table, column, and gross income in whole SEK.
 
+## Desktop application
+
+The native egui application provides monthly and annual income modes, tax
+table and column selection, the official monthly table result, an annual
+formula comparison, and the complete annual tax breakdown.
+
+```sh
+cargo run -p swedish-tax-gui
+```
+
+The GUI is a separate workspace package. Building the library or command-line
+programs does not build the graphical application unless it is selected.
+
 ## Sources
 
 - [SKV 433 technical specification](https://www.skatteverket.se/download/18.1522bf3f19aea8075ba55c/1766385913260/teknisk-beskrivning-skv-433-2026-utgava-36.pdf)

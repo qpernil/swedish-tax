@@ -8,3 +8,8 @@ description = "Swedish preliminary tax calculations for income year 2026"
 name = "swedish_tax"
 
 [dependencies]
+
+[workspace]
+members = ["gui"]
+default-members = ["."]
+resolver = "2"
