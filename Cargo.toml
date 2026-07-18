@@ -1,0 +1,10 @@
+[package]
+name = "swedish-tax"
+version = "0.1.0"
+edition = "2021"
+description = "Swedish preliminary tax calculations for income year 2026"
+
+[lib]
+name = "swedish_tax"
+
+[dependencies]
