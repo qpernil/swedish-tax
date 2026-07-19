@@ -1,6 +1,6 @@
 # Swedish tax calculations for 2026
 
-This crate implements Skatteverket monthly tax tables 32, 33, and 34 and the
+This crate implements Skatteverket monthly tax tables 29 through 42 and the
 annual preliminary-tax formulas from SKV 433, edition 36, for income year 2026.
 
 The calculations use the same assumptions as the published tables and are not

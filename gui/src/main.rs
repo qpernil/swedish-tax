@@ -1,7 +1,10 @@
 use eframe::egui;
-use swedish_tax::{AnnualTax, Column, TaxDeduction, annual_tax, tax_deduction};
+use swedish_tax::{
+    AnnualTax, Column, MAX_TAX_TABLE, MIN_TAX_TABLE, TaxDeduction, annual_tax, tax_deduction,
+};
 
 const MAX_INCOME: u32 = 100_000_000;
+const DEFAULT_MONTHLY_INCOME: u32 = 660_400 / 12;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum IncomePeriod {
@@ -63,7 +66,7 @@ impl Default for TaxApp {
             table: 32,
             column: 1,
             period: IncomePeriod::Monthly,
-            income: 35_000,
+            income: DEFAULT_MONTHLY_INCOME,
         }
     }
 }
@@ -106,10 +109,16 @@ impl TaxApp {
                     });
 
                     ui.add_space(12.0);
-                    control_group(ui, "Tax table", |ui| {
-                        for table in 32..=34 {
-                            ui.selectable_value(&mut self.table, table, table.to_string());
-                        }
+                    ui.vertical(|ui| {
+                        ui.label(secondary_label("Tax table"));
+                        egui::ComboBox::from_id_salt("tax-table")
+                            .selected_text(self.table.to_string())
+                            .width(70.0)
+                            .show_ui(ui, |ui| {
+                                for table in MIN_TAX_TABLE..=MAX_TAX_TABLE {
+                                    ui.selectable_value(&mut self.table, table, table.to_string());
+                                }
+                            });
                     });
 
                     ui.add_space(12.0);
@@ -517,6 +526,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn table_32_is_selected_by_default() {
+        assert_eq!(TaxApp::default().table, 32);
+    }
+
+    #[test]
+    fn default_income_is_the_highest_whole_monthly_income_below_the_state_tax_breakpoint() {
+        let app = TaxApp::default();
+        let calculation =
+            Calculation::new(app.table, app.selected_column(), app.period, app.income).unwrap();
+
+        assert_eq!(app.income, 55_033);
+        assert_eq!(calculation.annual_tax.state_income_tax, 0);
+        assert!(app.income * 12 <= 660_400);
+        assert!((app.income + 1) * 12 > 660_400);
+    }
+
+    #[test]
     fn monthly_input_uses_the_exact_monthly_lookup_and_annualizes_income() {
         let calculation =
             Calculation::new(34, Column::Column1, IncomePeriod::Monthly, 18_000).unwrap();
@@ -562,6 +588,16 @@ mod tests {
         assert_eq!(calculation.annual_tax.total, 0);
         assert_eq!(calculation.formula_monthly_net(), 0);
         assert_eq!(calculation.effective_rate(), 0.0);
+    }
+
+    #[test]
+    fn every_published_table_is_available() {
+        for table in MIN_TAX_TABLE..=MAX_TAX_TABLE {
+            assert!(
+                Calculation::new(table, Column::Column1, IncomePeriod::Monthly, 35_000).is_some(),
+                "table {table}"
+            );
+        }
     }
 
     #[test]
