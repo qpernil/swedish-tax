@@ -197,16 +197,16 @@ impl TaxApp {
             (
                 "Official table",
                 table_deduction_text(calculation.table_deduction),
-                Some(format!("Marginal tax: {:.1}%", calculation.marginal_rate)),
+                None,
                 blue_color(),
-                Some(marginal_rate_help as HoverHelp),
+                None,
             ),
             (
                 "Annual formula",
                 format_sek(calculation.annual_tax.total),
-                None,
+                Some(format!("Marginal tax: {:.1}%", calculation.marginal_rate)),
                 green_color(),
-                None,
+                Some(marginal_rate_help as HoverHelp),
             ),
             (
                 "Monthly net",
@@ -280,14 +280,16 @@ fn column_selector_help(ui: &mut egui::Ui) {
 
 fn marginal_rate_help(ui: &mut egui::Ui) {
     ui.set_max_width(380.0);
-    ui.label(egui::RichText::new("How Skatteverket calculates marginal tax").strong());
+    ui.label(egui::RichText::new("How marginal tax is calculated").strong());
+    ui.add_space(4.0);
+    ui.label("Marginal tax estimates the tax on a potential next 1,000 SEK of monthly income.");
     ui.add_space(4.0);
     ui.label(
-        "Skatteverket recommends comparing table withholding for your current monthly income with \
-         the withholding at 1,000 SEK more. This estimates the tax on a potential next 1,000 SEK.",
+        "This app annualizes your current monthly income and an income 1,000 SEK higher, then \
+         calculates the annual tax for both using the formula.",
     );
     ui.add_space(4.0);
-    ui.label("The additional withholding is divided by 1,000 and shown as a percentage.");
+    ui.label("The additional annual tax is divided by 12,000 and shown as a percentage.");
 }
 
 impl eframe::App for TaxApp {
@@ -693,11 +695,12 @@ mod tests {
     }
 
     #[test]
-    fn marginal_rate_uses_official_table_withholding() {
+    fn marginal_rate_uses_annual_formula() {
         let calculation =
             Calculation::new(34, TaxColumn::Column1, IncomePeriod::Annual, 216_000).unwrap();
 
-        assert_eq!(calculation.marginal_rate, 25.1);
+        let expected = f64::from(38_894 - 35_889) * 100.0 / 12_000.0;
+        assert_eq!(calculation.marginal_rate, expected);
     }
 
     #[test]

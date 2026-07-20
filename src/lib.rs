@@ -167,31 +167,18 @@ pub fn annual_tax(table: u8, column: TaxColumn, gross_yearly_income: u32) -> Opt
     })
 }
 
-/// Calculates marginal tax using monthly table withholding.
+/// Calculates marginal tax using the annual tax formula.
 ///
-/// The calculation compares withholding at `monthly_income` and at 1,000 SEK
-/// more, following Skatteverket's published method. At the maximum representable
-/// income, the preceding 1,000 SEK interval is used instead.
+/// The current monthly income and an income 1,000 SEK higher are annualized.
+/// Their annual-tax difference is divided by the 12,000 SEK annual interval.
 pub fn marginal_rate(table: u8, column: TaxColumn, monthly_income: u32) -> Option<f64> {
-    let upper_income = monthly_income.saturating_add(MARGINAL_INCOME_INTERVAL);
-    let lower_income = if upper_income == monthly_income {
-        monthly_income - MARGINAL_INCOME_INTERVAL
-    } else {
-        monthly_income
-    };
-    let lower_deduction = monthly_deduction(table, column, lower_income)?;
-    let upper_deduction = monthly_deduction(table, column, upper_income)?;
-
-    let tax_difference = i64::from(table_withholding(upper_income, upper_deduction))
-        - i64::from(table_withholding(lower_income, lower_deduction));
-    Some(tax_difference as f64 * 100.0 / f64::from(upper_income - lower_income))
-}
-
-const fn table_withholding(income: u32, deduction: TaxDeduction) -> u32 {
-    match deduction {
-        TaxDeduction::Amount(amount) => amount,
-        TaxDeduction::Percent(percent) => (income as u64 * percent as u64 / 100) as u32,
-    }
+    let upper_income = monthly_income.checked_add(MARGINAL_INCOME_INTERVAL)?;
+    let lower_annual_income = monthly_income.checked_mul(12)?;
+    let upper_annual_income = upper_income.checked_mul(12)?;
+    let lower_tax = annual_tax(table, column, lower_annual_income)?.total;
+    let upper_tax = annual_tax(table, column, upper_annual_income)?.total;
+    let tax_difference = i64::from(upper_tax) - i64::from(lower_tax);
+    Some(tax_difference as f64 * 100.0 / f64::from(upper_annual_income - lower_annual_income))
 }
 
 const fn round_down_hundred(value: u32) -> u32 {
@@ -382,6 +369,11 @@ mod tests {
         TaxColumn::Column5,
         TaxColumn::Column6,
     ];
+    const ANNUAL_FORMULA_GROSS_BREAKPOINTS: [u32; 16] = [
+        25_042, 53_872, 58_608, 65_712, 103_600, 116_328, 161_024, 184_112, 191_808, 296_000,
+        310_208, 466_496, 478_336, 660_672, 673_038, 760_128,
+    ];
+    const TAXABLE_INCOME_BREAKPOINTS: [u32; 4] = [40_000, 118_400, 240_000, 643_200];
 
     #[test]
     fn tables_cover_every_positive_income_without_gaps() {
@@ -584,10 +576,62 @@ mod tests {
     }
 
     #[test]
-    fn marginal_rate_uses_actual_table_withholding() {
-        assert_eq!(marginal_rate(34, TaxColumn::Column1, 18_000), Some(25.1));
+    fn marginal_rate_uses_annual_formula_at_all_incomes() {
+        let expected = f64::from(38_894 - 35_889) * 100.0 / 12_000.0;
+        assert_eq!(
+            marginal_rate(34, TaxColumn::Column1, 18_000),
+            Some(expected)
+        );
 
-        assert_eq!(marginal_rate(29, TaxColumn::Column1, u32::MAX), Some(48.0));
+        assert_eq!(marginal_rate(29, TaxColumn::Column1, u32::MAX), None);
         assert_eq!(marginal_rate(28, TaxColumn::Column1, 18_000), None);
+    }
+
+    #[test]
+    fn marginal_rate_covers_every_annual_formula_range_transition() {
+        for table in MIN_TAX_TABLE..=MAX_TAX_TABLE {
+            for column in COLUMNS {
+                for breakpoint in ANNUAL_FORMULA_GROSS_BREAKPOINTS {
+                    assert_formula_transition(table, column, breakpoint);
+                }
+
+                for taxable_breakpoint in TAXABLE_INCOME_BREAKPOINTS {
+                    let gross_breakpoint = (0..=1_000_000)
+                        .step_by(100)
+                        .find(|gross_income| {
+                            annual_tax(table, column, *gross_income)
+                                .is_some_and(|tax| tax.taxable_income >= taxable_breakpoint)
+                        })
+                        .unwrap();
+                    assert_formula_transition(table, column, gross_breakpoint);
+                }
+            }
+        }
+    }
+
+    fn assert_formula_transition(table: u8, column: TaxColumn, breakpoint: u32) {
+        let transition = breakpoint.div_ceil(100) * 100;
+        let before = annual_tax(table, column, transition.saturating_sub(100)).unwrap();
+        let at = annual_tax(table, column, transition).unwrap();
+        let after = annual_tax(table, column, transition + 100).unwrap();
+        for tax in [before, at, after] {
+            assert!(tax.total <= tax.assessed_income);
+        }
+
+        let monthly_income = transition.saturating_sub(6_000) / 12;
+        let lower_annual_income = monthly_income * 12;
+        let upper_annual_income = (monthly_income + MARGINAL_INCOME_INTERVAL) * 12;
+        assert!(lower_annual_income <= transition && transition <= upper_annual_income);
+        let lower_tax = annual_tax(table, column, lower_annual_income).unwrap();
+        let upper_tax = annual_tax(table, column, upper_annual_income).unwrap();
+        let expected = (f64::from(upper_tax.total) - f64::from(lower_tax.total)) * 100.0
+            / f64::from(upper_annual_income - lower_annual_income);
+        let actual = marginal_rate(table, column, monthly_income).unwrap();
+        assert_eq!(actual, expected);
+        assert!(
+            (0.0..=100.0).contains(&actual),
+            "invalid marginal rate at table {table}, column {}, breakpoint {breakpoint}: {actual}",
+            column as u8,
+        );
     }
 }
