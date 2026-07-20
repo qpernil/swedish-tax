@@ -17,7 +17,7 @@
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
-pub enum Column {
+pub enum TaxColumn {
     Column1 = 1,
     Column2 = 2,
     Column3 = 3,
@@ -26,7 +26,7 @@ pub enum Column {
     Column6 = 6,
 }
 
-impl Column {
+impl TaxColumn {
     const fn index(self) -> usize {
         self as usize - 1
     }
@@ -35,7 +35,7 @@ impl Column {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TaxDeduction {
     Amount(u32),
-    Percent(u8),
+    Percent(u32),
 }
 
 /// Lowest general monthly tax table published for income year 2026.
@@ -70,6 +70,7 @@ const PRICE_BASE_AMOUNT: u32 = 59_200;
 const STATE_TAX_THRESHOLD: u32 = 643_000;
 const BURIAL_AND_RELIGIOUS_RATE: u32 = 116;
 const PUBLIC_SERVICE_FEE_MAXIMUM: u32 = 1_184;
+const MARGINAL_INCOME_INTERVAL: u32 = 1_000;
 const SCALE: i128 = 100_000_000;
 
 /// Calculates preliminary annual tax for a yearly gross income in SEK.
@@ -77,13 +78,13 @@ const SCALE: i128 = 100_000_000;
 /// Tables 29 through 42 are supported. Income is rounded down to a
 /// whole hundred SEK as required by SKV 433. The selected column determines
 /// which allowance, fee, and tax-credit rules apply.
-pub fn annual_tax(table: u8, gross_yearly_income: u32, column: Column) -> Option<AnnualTax> {
+pub fn annual_tax(table: u8, column: TaxColumn, gross_yearly_income: u32) -> Option<AnnualTax> {
     if !(MIN_TAX_TABLE..=MAX_TAX_TABLE).contains(&table) {
         return None;
     }
 
     let assessed_income = round_down_hundred(gross_yearly_income);
-    let enhanced_allowance = matches!(column, Column::Column2 | Column::Column3);
+    let enhanced_allowance = matches!(column, TaxColumn::Column2 | TaxColumn::Column3);
     let basic_allowance = basic_allowance(assessed_income, enhanced_allowance);
     let taxable_income = assessed_income.saturating_sub(basic_allowance);
 
@@ -96,7 +97,10 @@ pub fn annual_tax(table: u8, gross_yearly_income: u32, column: Column) -> Option
     let municipal_income_tax = percentage_floor(taxable_income, municipal_rate, 10_000);
     let burial_and_religious_fee =
         percentage_floor(taxable_income, BURIAL_AND_RELIGIOUS_RATE, 10_000);
-    let has_pension_fee = matches!(column, Column::Column1 | Column::Column3 | Column::Column5);
+    let has_pension_fee = matches!(
+        column,
+        TaxColumn::Column1 | TaxColumn::Column3 | TaxColumn::Column5
+    );
     let pension_fee = if has_pension_fee {
         pension_fee(assessed_income)
     } else {
@@ -112,16 +116,16 @@ pub fn annual_tax(table: u8, gross_yearly_income: u32, column: Column) -> Option
         municipal_income_tax.saturating_sub(pension_credit_against_municipal);
 
     let calculated_work_credit = match column {
-        Column::Column1 => {
+        TaxColumn::Column1 => {
             work_income_credit_under_66(assessed_income, basic_allowance, municipal_rate)
         }
-        Column::Column3 => work_income_credit_over_66(assessed_income),
+        TaxColumn::Column3 => work_income_credit_over_66(assessed_income),
         _ => 0,
     };
     let work_income_credit = calculated_work_credit.min(municipal_tax_left);
     municipal_tax_left -= work_income_credit;
 
-    let calculated_sickness_credit = if column == Column::Column4 {
+    let calculated_sickness_credit = if column == TaxColumn::Column4 {
         sickness_compensation_credit(assessed_income, basic_allowance, municipal_rate)
     } else {
         0
@@ -161,6 +165,33 @@ pub fn annual_tax(table: u8, gross_yearly_income: u32, column: Column) -> Option
         public_service_fee,
         total,
     })
+}
+
+/// Calculates marginal tax using monthly table withholding.
+///
+/// The calculation compares withholding at `monthly_income` and at 1,000 SEK
+/// more, following Skatteverket's published method. At the maximum representable
+/// income, the preceding 1,000 SEK interval is used instead.
+pub fn marginal_rate(table: u8, column: TaxColumn, monthly_income: u32) -> Option<f64> {
+    let upper_income = monthly_income.saturating_add(MARGINAL_INCOME_INTERVAL);
+    let lower_income = if upper_income == monthly_income {
+        monthly_income - MARGINAL_INCOME_INTERVAL
+    } else {
+        monthly_income
+    };
+    let lower_deduction = monthly_deduction(table, column, lower_income)?;
+    let upper_deduction = monthly_deduction(table, column, upper_income)?;
+
+    let tax_difference = i64::from(table_withholding(upper_income, upper_deduction))
+        - i64::from(table_withholding(lower_income, lower_deduction));
+    Some(tax_difference as f64 * 100.0 / f64::from(upper_income - lower_income))
+}
+
+const fn table_withholding(income: u32, deduction: TaxDeduction) -> u32 {
+    match deduction {
+        TaxDeduction::Amount(amount) => amount,
+        TaxDeduction::Percent(percent) => (income as u64 * percent as u64 / 100) as u32,
+    }
 }
 
 const fn round_down_hundred(value: u32) -> u32 {
@@ -286,7 +317,11 @@ struct Row {
 ///
 /// Returns `None` for unsupported tables. Income zero has no source row but
 /// naturally produces a zero deduction.
-pub fn tax_deduction(table: u8, gross_monthly_income: u32, column: Column) -> Option<TaxDeduction> {
+pub fn monthly_deduction(
+    table: u8,
+    column: TaxColumn,
+    gross_monthly_income: u32,
+) -> Option<TaxDeduction> {
     let rows = table_rows(table)?;
     if gross_monthly_income == 0 {
         return Some(TaxDeduction::Amount(0));
@@ -306,7 +341,7 @@ pub fn tax_deduction(table: u8, gross_monthly_income: u32, column: Column) -> Op
     let value = row.values[column.index()];
     Some(match row.kind {
         RowKind::Amount => TaxDeduction::Amount(value),
-        RowKind::Percent => TaxDeduction::Percent(value as u8),
+        RowKind::Percent => TaxDeduction::Percent(value),
     })
 }
 
@@ -339,13 +374,13 @@ include!(concat!(env!("OUT_DIR"), "/monthly_tables.rs"));
 mod tests {
     use super::*;
 
-    const COLUMNS: [Column; 6] = [
-        Column::Column1,
-        Column::Column2,
-        Column::Column3,
-        Column::Column4,
-        Column::Column5,
-        Column::Column6,
+    const COLUMNS: [TaxColumn; 6] = [
+        TaxColumn::Column1,
+        TaxColumn::Column2,
+        TaxColumn::Column3,
+        TaxColumn::Column4,
+        TaxColumn::Column5,
+        TaxColumn::Column6,
     ];
 
     #[test]
@@ -362,10 +397,10 @@ mod tests {
                 for (index, column) in COLUMNS.into_iter().enumerate() {
                     let expected = Some(match row.kind {
                         RowKind::Amount => TaxDeduction::Amount(row.values[index]),
-                        RowKind::Percent => TaxDeduction::Percent(row.values[index] as u8),
+                        RowKind::Percent => TaxDeduction::Percent(row.values[index]),
                     });
-                    assert_eq!(tax_deduction(table, row.minimum, column), expected);
-                    assert_eq!(tax_deduction(table, row.maximum, column), expected);
+                    assert_eq!(monthly_deduction(table, column, row.minimum), expected);
+                    assert_eq!(monthly_deduction(table, column, row.maximum), expected);
                 }
             }
         }
@@ -374,47 +409,47 @@ mod tests {
     #[test]
     fn official_boundary_values_match_the_source_file() {
         assert_eq!(
-            tax_deduction(29, 2_001, Column::Column6),
+            monthly_deduction(29, TaxColumn::Column6, 2_001),
             Some(TaxDeduction::Amount(2))
         );
         assert_eq!(
-            tax_deduction(29, u32::MAX, Column::Column1),
+            monthly_deduction(29, TaxColumn::Column1, u32::MAX),
             Some(TaxDeduction::Percent(48))
         );
         assert_eq!(
-            tax_deduction(32, 2_001, Column::Column6),
+            monthly_deduction(32, TaxColumn::Column6, 2_001),
             Some(TaxDeduction::Amount(2))
         );
         assert_eq!(
-            tax_deduction(32, 80_000, Column::Column1),
+            monthly_deduction(32, TaxColumn::Column1, 80_000),
             Some(TaxDeduction::Amount(25_944))
         );
         assert_eq!(
-            tax_deduction(32, 80_001, Column::Column1),
+            monthly_deduction(32, TaxColumn::Column1, 80_001),
             Some(TaxDeduction::Percent(32))
         );
         assert_eq!(
-            tax_deduction(33, 80_000, Column::Column4),
+            monthly_deduction(33, TaxColumn::Column4, 80_000),
             Some(TaxDeduction::Amount(23_386))
         );
         assert_eq!(
-            tax_deduction(33, 80_001, Column::Column6),
+            monthly_deduction(33, TaxColumn::Column6, 80_001),
             Some(TaxDeduction::Percent(39))
         );
         assert_eq!(
-            tax_deduction(34, 80_000, Column::Column3),
+            monthly_deduction(34, TaxColumn::Column3, 80_000),
             Some(TaxDeduction::Amount(24_065))
         );
         assert_eq!(
-            tax_deduction(34, u32::MAX, Column::Column4),
+            monthly_deduction(34, TaxColumn::Column4, u32::MAX),
             Some(TaxDeduction::Percent(45))
         );
         assert_eq!(
-            tax_deduction(42, 2_001, Column::Column6),
+            monthly_deduction(42, TaxColumn::Column6, 2_001),
             Some(TaxDeduction::Amount(3))
         );
         assert_eq!(
-            tax_deduction(42, u32::MAX, Column::Column4),
+            monthly_deduction(42, TaxColumn::Column4, u32::MAX),
             Some(TaxDeduction::Percent(51))
         );
     }
@@ -422,7 +457,7 @@ mod tests {
     #[test]
     fn annual_formula_matches_skv_433_worked_examples() {
         assert_eq!(
-            annual_tax(34, 216_000, Column::Column1),
+            annual_tax(34, TaxColumn::Column1, 216_000),
             Some(AnnualTax {
                 assessed_income: 216_000,
                 basic_allowance: 42_400,
@@ -441,7 +476,7 @@ mod tests {
         );
 
         assert_eq!(
-            annual_tax(34, 31_200, Column::Column1),
+            annual_tax(34, TaxColumn::Column1, 31_200),
             Some(AnnualTax {
                 assessed_income: 31_200,
                 basic_allowance: 25_100,
@@ -460,7 +495,7 @@ mod tests {
         );
 
         assert_eq!(
-            annual_tax(34, 1_020_000, Column::Column1),
+            annual_tax(34, TaxColumn::Column1, 1_020_000),
             Some(AnnualTax {
                 assessed_income: 1_020_000,
                 basic_allowance: 17_400,
@@ -489,7 +524,7 @@ mod tests {
                 }
                 let annual_income = row.maximum * 12;
                 for (index, column) in COLUMNS.into_iter().enumerate() {
-                    let annual = annual_tax(table, annual_income, column).unwrap();
+                    let annual = annual_tax(table, column, annual_income).unwrap();
                     assert_eq!(
                         annual.total / 12,
                         row.values[index],
@@ -520,7 +555,7 @@ mod tests {
                 for monthly_income in monthly_incomes {
                     let annual_income = monthly_income * 12;
                     for (index, column) in COLUMNS.into_iter().enumerate() {
-                        let annual = annual_tax(table, annual_income, column).unwrap();
+                        let annual = annual_tax(table, column, annual_income).unwrap();
                         let denominator = u64::from(annual_income);
                         let calculated = u64::from(annual.total) * 100;
                         let published = u64::from(row.values[index]) * denominator;
@@ -538,13 +573,21 @@ mod tests {
 
     #[test]
     fn unsupported_tables_are_not_found_and_zero_income_has_zero_tax() {
-        assert_eq!(tax_deduction(28, 50_000, Column::Column1), None);
-        assert_eq!(tax_deduction(43, 50_000, Column::Column1), None);
+        assert_eq!(monthly_deduction(28, TaxColumn::Column1, 50_000), None);
+        assert_eq!(monthly_deduction(43, TaxColumn::Column1, 50_000), None);
         assert_eq!(
-            tax_deduction(32, 0, Column::Column1),
+            monthly_deduction(32, TaxColumn::Column1, 0),
             Some(TaxDeduction::Amount(0))
         );
-        assert_eq!(annual_tax(28, 50_000, Column::Column1), None);
-        assert_eq!(annual_tax(43, 50_000, Column::Column1), None);
+        assert_eq!(annual_tax(28, TaxColumn::Column1, 50_000), None);
+        assert_eq!(annual_tax(43, TaxColumn::Column1, 50_000), None);
+    }
+
+    #[test]
+    fn marginal_rate_uses_actual_table_withholding() {
+        assert_eq!(marginal_rate(34, TaxColumn::Column1, 18_000), Some(25.1));
+
+        assert_eq!(marginal_rate(29, TaxColumn::Column1, u32::MAX), Some(48.0));
+        assert_eq!(marginal_rate(28, TaxColumn::Column1, 18_000), None);
     }
 }

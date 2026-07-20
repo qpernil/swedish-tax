@@ -1,14 +1,14 @@
 use std::{env, process::ExitCode};
-use swedish_tax::{annual_tax, Column};
+use swedish_tax::{annual_tax, TaxColumn};
 
-fn parse_column(value: &str) -> Result<Column, String> {
+fn parse_column(value: &str) -> Result<TaxColumn, String> {
     match value {
-        "1" => Ok(Column::Column1),
-        "2" => Ok(Column::Column2),
-        "3" => Ok(Column::Column3),
-        "4" => Ok(Column::Column4),
-        "5" => Ok(Column::Column5),
-        "6" => Ok(Column::Column6),
+        "1" => Ok(TaxColumn::Column1),
+        "2" => Ok(TaxColumn::Column2),
+        "3" => Ok(TaxColumn::Column3),
+        "4" => Ok(TaxColumn::Column4),
+        "5" => Ok(TaxColumn::Column5),
+        "6" => Ok(TaxColumn::Column6),
         _ => Err(format!("invalid column: {value}")),
     }
 }
@@ -25,7 +25,7 @@ fn run() -> Result<(), String> {
     let income = args[3]
         .parse::<u32>()
         .map_err(|_| format!("invalid yearly income: {}", args[3]))?;
-    let tax = annual_tax(table, income, column)
+    let tax = annual_tax(table, column, income)
         .ok_or_else(|| format!("unsupported tax table: {table}"))?;
 
     println!("assessed_income: {} SEK", tax.assessed_income);

@@ -1,10 +1,19 @@
 use eframe::egui;
 use swedish_tax::{
-    AnnualTax, Column, MAX_TAX_TABLE, MIN_TAX_TABLE, TaxDeduction, annual_tax, tax_deduction,
+    AnnualTax, MAX_TAX_TABLE, MIN_TAX_TABLE, TaxColumn, TaxDeduction, annual_tax, marginal_rate,
+    monthly_deduction,
 };
 
 const MAX_INCOME: u32 = 100_000_000;
 const DEFAULT_MONTHLY_INCOME: u32 = 660_400 / 12;
+type HoverHelp = fn(&mut egui::Ui);
+type Summary<'a> = (
+    &'a str,
+    String,
+    Option<String>,
+    egui::Color32,
+    Option<HoverHelp>,
+);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum IncomePeriod {
@@ -18,28 +27,33 @@ struct Calculation {
     annual_income: u32,
     table_deduction: TaxDeduction,
     annual_tax: AnnualTax,
+    marginal_rate: f64,
 }
 
 impl Calculation {
-    fn new(table: u8, column: Column, period: IncomePeriod, income: u32) -> Option<Self> {
+    fn new(table: u8, column: TaxColumn, period: IncomePeriod, income: u32) -> Option<Self> {
         let (monthly_income, annual_income) = match period {
             IncomePeriod::Monthly => (income, income.saturating_mul(12)),
             IncomePeriod::Annual => (income / 12, income),
         };
+        let table_deduction = monthly_deduction(table, column, monthly_income)?;
+        let annual_tax = annual_tax(table, column, annual_income)?;
+        let marginal_rate = marginal_rate(table, column, monthly_income)?;
 
         Some(Self {
             monthly_income,
             annual_income,
-            table_deduction: tax_deduction(table, monthly_income, column)?,
-            annual_tax: annual_tax(table, annual_income, column)?,
+            table_deduction,
+            annual_tax,
+            marginal_rate,
         })
     }
 
-    fn formula_monthly_tax(self) -> u32 {
+    const fn formula_monthly_tax(self) -> u32 {
         self.annual_tax.total / 12
     }
 
-    fn formula_monthly_net(self) -> u32 {
+    const fn formula_monthly_net(self) -> u32 {
         self.monthly_income
             .saturating_sub(self.formula_monthly_tax())
     }
@@ -77,14 +91,14 @@ impl TaxApp {
         Self::default()
     }
 
-    fn selected_column(&self) -> Column {
+    fn selected_column(&self) -> TaxColumn {
         match self.column {
-            1 => Column::Column1,
-            2 => Column::Column2,
-            3 => Column::Column3,
-            4 => Column::Column4,
-            5 => Column::Column5,
-            6 => Column::Column6,
+            1 => TaxColumn::Column1,
+            2 => TaxColumn::Column2,
+            3 => TaxColumn::Column3,
+            4 => TaxColumn::Column4,
+            5 => TaxColumn::Column5,
+            6 => TaxColumn::Column6,
             _ => unreachable!("the column selector only exposes columns 1 through 6"),
         }
     }
@@ -111,20 +125,22 @@ impl TaxApp {
                     ui.add_space(12.0);
                     ui.vertical(|ui| {
                         ui.label(secondary_label("Tax table"));
-                        egui::ComboBox::from_id_salt("tax-table")
+                        let response = egui::ComboBox::from_id_salt("tax-table")
                             .selected_text(self.table.to_string())
                             .width(70.0)
                             .show_ui(ui, |ui| {
                                 for table in MIN_TAX_TABLE..=MAX_TAX_TABLE {
                                     ui.selectable_value(&mut self.table, table, table.to_string());
                                 }
-                            });
+                            })
+                            .response;
+                        response.on_hover_ui(table_selector_help);
                     });
 
                     ui.add_space(12.0);
                     ui.vertical(|ui| {
                         ui.label(secondary_label("Column"));
-                        egui::ComboBox::from_id_salt("tax-column")
+                        let response = egui::ComboBox::from_id_salt("tax-column")
                             .selected_text(self.column.to_string())
                             .width(90.0)
                             .show_ui(ui, |ui| {
@@ -135,7 +151,9 @@ impl TaxApp {
                                         format!("Column {column}"),
                                     );
                                 }
-                            });
+                            })
+                            .response;
+                        response.on_hover_ui(column_selector_help);
                     });
 
                     ui.add_space(12.0);
@@ -179,17 +197,23 @@ impl TaxApp {
             (
                 "Official table",
                 table_deduction_text(calculation.table_deduction),
+                Some(format!("Marginal tax: {:.1}%", calculation.marginal_rate)),
                 blue_color(),
+                Some(marginal_rate_help as HoverHelp),
             ),
             (
                 "Annual formula",
                 format_sek(calculation.annual_tax.total),
+                None,
                 green_color(),
+                None,
             ),
             (
                 "Monthly net",
                 format_sek(calculation.formula_monthly_net()),
+                None,
                 primary_text(),
+                None,
             ),
         ];
         summary_tiles(ui, &summaries);
@@ -209,6 +233,61 @@ impl TaxApp {
         ui.add_space(8.0);
         annual_breakdown(ui, calculation.annual_tax);
     }
+}
+
+fn table_selector_help(ui: &mut egui::Ui) {
+    ui.set_max_width(360.0);
+    ui.label(egui::RichText::new("Find your tax table").strong());
+    ui.add_space(4.0);
+    ui.label(
+        "On skatteverket.se, open Mina sidor and select A-skattsedel, skattetabell och \
+         jämkningsbeslut. Open your A-tax certificate as a PDF; it states which table your \
+         payer should use.",
+    );
+    ui.add_space(4.0);
+    ui.label(
+        egui::RichText::new(
+            "The table is based on where you were registered on 1 November of the preceding year.",
+        )
+        .small()
+        .color(secondary_text()),
+    );
+}
+
+fn column_selector_help(ui: &mut egui::Ui) {
+    const COLUMNS: [&str; 6] = [
+        "1. Salary, under 66. Work income eligible for the earned-income tax credit.",
+        "2. Pension, 66 or older. No general pension contribution or earned-income tax credit.",
+        "3. Salary, 66 or older. Work income eligible for the enhanced earned-income tax credit.",
+        "4. Sickness or activity compensation, under 66. Eligible for its specific tax reduction.",
+        "5. Other pensionable compensation. For example unemployment benefits; no earned-income tax credit.",
+        "6. Pension, under 66. No general pension contribution or earned-income tax credit.",
+    ];
+
+    ui.set_max_width(420.0);
+    ui.label(egui::RichText::new("2026 table columns").strong());
+    ui.add_space(4.0);
+    for description in COLUMNS {
+        ui.label(description);
+    }
+    ui.add_space(4.0);
+    ui.label(
+        egui::RichText::new("Age is determined at the beginning of the income year.")
+            .small()
+            .color(secondary_text()),
+    );
+}
+
+fn marginal_rate_help(ui: &mut egui::Ui) {
+    ui.set_max_width(380.0);
+    ui.label(egui::RichText::new("How Skatteverket calculates marginal tax").strong());
+    ui.add_space(4.0);
+    ui.label(
+        "Skatteverket recommends comparing table withholding for your current monthly income with \
+         the withholding at 1,000 SEK more. This estimates the tax on a potential next 1,000 SEK.",
+    );
+    ui.add_space(4.0);
+    ui.label("The additional withholding is divided by 1,000 and shown as a percentage.");
 }
 
 impl eframe::App for TaxApp {
@@ -294,31 +373,64 @@ fn control_group(ui: &mut egui::Ui, label: &str, contents: impl FnOnce(&mut egui
     });
 }
 
-fn summary_tiles(ui: &mut egui::Ui, summaries: &[(&str, String, egui::Color32); 3]) {
+fn summary_tiles(ui: &mut egui::Ui, summaries: &[Summary<'_>; 3]) {
     if ui.available_width() >= 720.0 {
         ui.columns(3, |columns| {
             for (column, summary) in columns.iter_mut().zip(summaries) {
-                summary_tile(column, summary.0, &summary.1, summary.2);
+                summary_tile(
+                    column,
+                    summary.0,
+                    &summary.1,
+                    summary.2.as_deref(),
+                    summary.3,
+                    summary.4,
+                );
             }
         });
     } else {
         for summary in summaries {
-            summary_tile(ui, summary.0, &summary.1, summary.2);
+            summary_tile(
+                ui,
+                summary.0,
+                &summary.1,
+                summary.2.as_deref(),
+                summary.3,
+                summary.4,
+            );
             ui.add_space(6.0);
         }
     }
 }
 
-fn summary_tile(ui: &mut egui::Ui, label: &str, value: &str, color: egui::Color32) {
+fn summary_tile(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &str,
+    detail: Option<&str>,
+    color: egui::Color32,
+    detail_help: Option<HoverHelp>,
+) {
     egui::Frame::new()
         .fill(surface_color())
         .stroke(egui::Stroke::new(1.0, border_color()))
         .inner_margin(15.0)
         .show(ui, |ui| {
-            ui.set_min_height(62.0);
+            ui.set_min_height(86.0);
             ui.label(secondary_label(label));
             ui.add_space(4.0);
             ui.label(egui::RichText::new(value).strong().size(20.0).color(color));
+            if let Some(detail) = detail {
+                ui.add_space(4.0);
+                let response = ui.label(
+                    egui::RichText::new(detail)
+                        .strong()
+                        .size(13.0)
+                        .color(primary_text()),
+                );
+                if let Some(help) = detail_help {
+                    response.on_hover_ui(help);
+                }
+            }
         });
 }
 
@@ -545,17 +657,17 @@ mod tests {
     #[test]
     fn monthly_input_uses_the_exact_monthly_lookup_and_annualizes_income() {
         let calculation =
-            Calculation::new(34, Column::Column1, IncomePeriod::Monthly, 18_000).unwrap();
+            Calculation::new(34, TaxColumn::Column1, IncomePeriod::Monthly, 18_000).unwrap();
 
         assert_eq!(calculation.monthly_income, 18_000);
         assert_eq!(calculation.annual_income, 216_000);
         assert_eq!(
             calculation.table_deduction,
-            tax_deduction(34, 18_000, Column::Column1).unwrap()
+            monthly_deduction(34, TaxColumn::Column1, 18_000).unwrap()
         );
         assert_eq!(
             calculation.annual_tax,
-            annual_tax(34, 216_000, Column::Column1).unwrap()
+            annual_tax(34, TaxColumn::Column1, 216_000).unwrap()
         );
         assert_eq!(
             calculation.formula_monthly_tax(),
@@ -566,23 +678,32 @@ mod tests {
     #[test]
     fn annual_input_uses_one_twelfth_for_the_table_lookup() {
         let calculation =
-            Calculation::new(32, Column::Column3, IncomePeriod::Annual, 420_011).unwrap();
+            Calculation::new(32, TaxColumn::Column3, IncomePeriod::Annual, 420_011).unwrap();
 
         assert_eq!(calculation.monthly_income, 35_000);
         assert_eq!(calculation.annual_income, 420_011);
         assert_eq!(
             calculation.table_deduction,
-            tax_deduction(32, 35_000, Column::Column3).unwrap()
+            monthly_deduction(32, TaxColumn::Column3, 35_000).unwrap()
         );
         assert_eq!(
             calculation.annual_tax,
-            annual_tax(32, 420_011, Column::Column3).unwrap()
+            annual_tax(32, TaxColumn::Column3, 420_011).unwrap()
         );
     }
 
     #[test]
+    fn marginal_rate_uses_official_table_withholding() {
+        let calculation =
+            Calculation::new(34, TaxColumn::Column1, IncomePeriod::Annual, 216_000).unwrap();
+
+        assert_eq!(calculation.marginal_rate, 25.1);
+    }
+
+    #[test]
     fn zero_income_has_zero_tax_and_a_stable_rate() {
-        let calculation = Calculation::new(33, Column::Column1, IncomePeriod::Monthly, 0).unwrap();
+        let calculation =
+            Calculation::new(33, TaxColumn::Column1, IncomePeriod::Monthly, 0).unwrap();
 
         assert_eq!(calculation.table_deduction, TaxDeduction::Amount(0));
         assert_eq!(calculation.annual_tax.total, 0);
@@ -594,7 +715,8 @@ mod tests {
     fn every_published_table_is_available() {
         for table in MIN_TAX_TABLE..=MAX_TAX_TABLE {
             assert!(
-                Calculation::new(table, Column::Column1, IncomePeriod::Monthly, 35_000).is_some(),
+                Calculation::new(table, TaxColumn::Column1, IncomePeriod::Monthly, 35_000)
+                    .is_some(),
                 "table {table}"
             );
         }
