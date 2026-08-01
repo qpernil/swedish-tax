@@ -28,6 +28,9 @@ the employer uplift, the remaining pension allowance, and the taxable cash payme
 Vacation compensation is pensionable by default in the ITP 1-style model and shows
 its estimated additional employer contribution separately. Pensionability and actual
 contribution amounts remain editable for individually agreed pension terms.
+Recurring salary rows can also use their 12-month projection as the annual income
+basis behind a percentage jämkning decision. The annual result then shows the
+calibration explicitly while preserving the row's actual payment dates.
 
 ```sh
 cargo run -p swedish-tax-gui

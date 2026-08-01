@@ -18,6 +18,16 @@ type Summary<'a> = (
     Option<HoverHelp>,
 );
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct AdjustmentCalibration {
+    basis_income: u32,
+    percent: u32,
+    formula_tax_at_basis: u32,
+    assumed_tax_at_basis: u32,
+    implied_tax_adjustment: i64,
+    projected_ordinary_tax: u32,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Calculation {
     monthly_income: u32,
@@ -26,6 +36,8 @@ struct Calculation {
     dividend_income: u32,
     table_deduction: TaxDeduction,
     annual_tax: AnnualTax,
+    adjustment_calibration: Option<AdjustmentCalibration>,
+    ordinary_final_tax: u32,
     dividend_tax: u32,
     total_tax: u32,
     withheld_tax: u32,
@@ -50,8 +62,37 @@ impl Calculation {
         let monthly_income = totals.monthly_taxable_income();
         let table_deduction = monthly_deduction(table, age_group.salary_column(), monthly_income)?;
         let annual_tax = annual_tax_for_income_profile(table, age_group, totals.annual_profile())?;
+        let adjustment_calibration =
+            match (plan.adjustment_percent, totals.adjustment_basis_work_income) {
+                (Some(percent), basis_income) if basis_income > 0 => {
+                    let basis_profile = swedish_tax::AnnualIncomeProfile {
+                        work_income: basis_income,
+                        pension_income: 0,
+                    };
+                    let formula_tax_at_basis =
+                        annual_tax_for_income_profile(table, age_group, basis_profile)?.total;
+                    let assumed_tax_at_basis = percentage(basis_income, percent);
+                    let implied_tax_adjustment =
+                        i64::from(formula_tax_at_basis) - i64::from(assumed_tax_at_basis);
+                    let projected_ordinary_tax =
+                        (i64::from(annual_tax.total) - implied_tax_adjustment)
+                            .clamp(0, i64::from(u32::MAX)) as u32;
+                    Some(AdjustmentCalibration {
+                        basis_income,
+                        percent,
+                        formula_tax_at_basis,
+                        assumed_tax_at_basis,
+                        implied_tax_adjustment,
+                        projected_ordinary_tax,
+                    })
+                }
+                _ => None,
+            };
+        let ordinary_final_tax = adjustment_calibration
+            .map(|calibration| calibration.projected_ordinary_tax)
+            .unwrap_or(annual_tax.total);
         let dividend_tax = percentage(totals.dividend_income, 20);
-        let total_tax = annual_tax.total.saturating_add(dividend_tax);
+        let total_tax = ordinary_final_tax.saturating_add(dividend_tax);
         let withheld_tax = plan.estimated_withholding(table, age_group).total;
         let upper_profile = swedish_tax::AnnualIncomeProfile {
             work_income: totals.work_income.saturating_add(12_000),
@@ -69,6 +110,8 @@ impl Calculation {
             dividend_income: totals.dividend_income,
             table_deduction,
             annual_tax,
+            adjustment_calibration,
+            ordinary_final_tax,
             dividend_tax,
             total_tax,
             withheld_tax,
@@ -99,7 +142,7 @@ impl Calculation {
         if self.ordinary_income == 0 {
             0.0
         } else {
-            f64::from(self.annual_tax.total) * 100.0 / f64::from(self.ordinary_income)
+            f64::from(self.ordinary_final_tax) * 100.0 / f64::from(self.ordinary_income)
         }
     }
 
@@ -263,7 +306,11 @@ impl TaxApp {
 
         let summaries = [
             (
-                "Final tax estimate",
+                if calculation.adjustment_calibration.is_some() {
+                    "Jämkning-calibrated tax projection"
+                } else {
+                    "Final tax estimate"
+                },
                 format_sek(calculation.total_tax),
                 Some(format!("Marginal tax: {:.1}%", calculation.marginal_rate)),
                 green_color(),
@@ -306,13 +353,21 @@ impl TaxApp {
         ui.separator();
         ui.add_space(18.0);
         ui.label(
-            egui::RichText::new("Annual formula breakdown")
-                .strong()
-                .size(17.0)
-                .color(primary_text()),
+            egui::RichText::new(if calculation.adjustment_calibration.is_some() {
+                "Annual tax projection breakdown"
+            } else {
+                "Annual formula breakdown"
+            })
+            .strong()
+            .size(17.0)
+            .color(primary_text()),
         );
         ui.add_space(8.0);
         annual_breakdown(ui, calculation.annual_tax);
+        if let Some(calibration) = calculation.adjustment_calibration {
+            ui.add_space(8.0);
+            adjustment_calibration_breakdown(ui, calibration);
+        }
         if calculation.dividend_income > 0 {
             ui.add_space(8.0);
             egui::Grid::new("dividend-tax-breakdown-grid")
@@ -724,6 +779,12 @@ fn income_entry_editor(
                 if entry.kind != IncomeKind::MonthlySalary {
                     entry.vacation_compensation = None;
                 }
+                if !matches!(
+                    entry.kind,
+                    IncomeKind::AnnualSalary | IncomeKind::MonthlySalary
+                ) {
+                    entry.use_full_year_projection_as_adjustment_basis = false;
+                }
             }
 
             if entry.kind.is_monthly() {
@@ -765,6 +826,10 @@ fn income_entry_editor(
                 entry.kind,
                 IncomeKind::AnnualSalary | IncomeKind::MonthlySalary
             ) {
+                if let Some(percent) = adjustment {
+                    ui.add_space(8.0);
+                    adjustment_basis_editor(ui, entry, percent);
+                }
                 ui.add_space(8.0);
                 regular_pension_premium_editor(ui, entry);
             }
@@ -834,6 +899,48 @@ fn income_entry_editor(
                     ))
                     .small()
                     .color(secondary_text()),
+                );
+            }
+        });
+}
+
+fn adjustment_basis_editor(ui: &mut egui::Ui, entry: &mut IncomeEntry, percent: u32) {
+    egui::Frame::new()
+        .fill(egui::Color32::from_rgb(252, 249, 239))
+        .stroke(egui::Stroke::new(
+            1.0,
+            egui::Color32::from_rgb(222, 207, 163),
+        ))
+        .corner_radius(5.0)
+        .inner_margin(10.0)
+        .show(ui, |ui| {
+            ui.checkbox(
+                &mut entry.use_full_year_projection_as_adjustment_basis,
+                "Use full-year projection as jämkning basis",
+            );
+            ui.label(
+                egui::RichText::new(
+                    "Projects this recurring income over all 12 months and assumes the entered percentage jämkning was calculated from that annual amount. This does not change the actual income period.",
+                )
+                .small()
+                .color(secondary_text()),
+            );
+            if entry.use_full_year_projection_as_adjustment_basis {
+                let basis = entry.full_year_adjustment_basis_amount();
+                ui.add_space(4.0);
+                let basis_text = if entry.kind == IncomeKind::MonthlySalary {
+                    format!(
+                        "Jämkning basis: {} × 12 = {} at {percent}%",
+                        format_sek(entry.amount),
+                        format_sek(basis),
+                    )
+                } else {
+                    format!("Jämkning basis: {} at {percent}%", format_sek(basis))
+                };
+                ui.label(
+                    egui::RichText::new(basis_text)
+                        .strong()
+                        .color(primary_text()),
                 );
             }
         });
@@ -1653,7 +1760,15 @@ fn annual_reconciliation(ui: &mut egui::Ui, calculation: Calculation) {
                 "Cash after withholding",
                 format_sek(calculation.cash_after_withholding()),
             );
-            value_row(ui, "Estimated final tax", format_sek(calculation.total_tax));
+            value_row(
+                ui,
+                if calculation.adjustment_calibration.is_some() {
+                    "Jämkning-calibrated tax projection"
+                } else {
+                    "Estimated final tax"
+                },
+                format_sek(calculation.total_tax),
+            );
             let balance = calculation.tax_balance();
             if balance > 0 {
                 value_row(ui, "Expected kvarskatt", format_sek(balance as u32));
@@ -1860,6 +1975,54 @@ fn annual_breakdown(ui: &mut egui::Ui, tax: AnnualTax) {
         });
 }
 
+fn adjustment_calibration_breakdown(ui: &mut egui::Ui, calibration: AdjustmentCalibration) {
+    ui.label(
+        egui::RichText::new(
+            "Jämkning calibration assumes the full-year basis would have produced zero balance at the entered percentage. The implied adjustment is then held constant for the actual annual income.",
+        )
+        .small()
+        .color(secondary_text()),
+    );
+    ui.add_space(4.0);
+    egui::Grid::new("adjustment-calibration-grid")
+        .num_columns(2)
+        .striped(true)
+        .min_col_width(260.0)
+        .show(ui, |ui| {
+            value_row(
+                ui,
+                "Full-year jämkning basis",
+                format_sek(calibration.basis_income),
+            );
+            value_row(
+                ui,
+                &format!("Assumed zero-balance tax at {}%", calibration.percent),
+                format_sek(calibration.assumed_tax_at_basis),
+            );
+            value_row(
+                ui,
+                "Formula tax at the basis income",
+                format_sek(calibration.formula_tax_at_basis),
+            );
+            let adjustment = match calibration.implied_tax_adjustment.cmp(&0) {
+                std::cmp::Ordering::Greater => {
+                    format!("−{}", format_sek(calibration.implied_tax_adjustment as u32))
+                }
+                std::cmp::Ordering::Less => format!(
+                    "+{}",
+                    format_sek(calibration.implied_tax_adjustment.unsigned_abs() as u32)
+                ),
+                std::cmp::Ordering::Equal => format_sek(0),
+            };
+            value_row(ui, "Implied adjustment to formula tax", adjustment);
+            value_row(
+                ui,
+                "Jämkning-calibrated ordinary tax projection",
+                format_sek(calibration.projected_ordinary_tax),
+            );
+        });
+}
+
 fn value_row(ui: &mut egui::Ui, label: &str, value: String) {
     ui.label(egui::RichText::new(label).color(secondary_text()));
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -2001,6 +2164,27 @@ mod tests {
 
         plan.add_entry(IncomeKind::AnnualOccupationalPension);
         assert!(!has_uniform_monthly_table_reference(&plan));
+    }
+
+    #[test]
+    fn full_year_adjustment_basis_calibrates_the_partial_year_projection() {
+        let mut plan = IncomePlan::with_monthly_salary(93_000);
+        plan.adjustment_percent = Some(33);
+        plan.entries[0].end = Date2026::new(10, 18);
+        plan.entries[0].adjustment_applies = true;
+        plan.entries[0].use_full_year_projection_as_adjustment_basis = true;
+
+        let calculation = Calculation::new(32, TaxAgeGroup::Under66AtYearStart, &plan).unwrap();
+        let calibration = calculation.adjustment_calibration.unwrap();
+
+        assert_eq!(calibration.basis_income, 1_116_000);
+        assert_eq!(calibration.assumed_tax_at_basis, 368_280);
+        assert_eq!(calibration.formula_tax_at_basis, 392_457);
+        assert_eq!(calibration.implied_tax_adjustment, 24_177);
+        assert_eq!(calculation.annual_tax.total, 275_457);
+        assert_eq!(calculation.ordinary_final_tax, 251_280);
+        assert_eq!(calculation.withheld_tax, 294_030);
+        assert_eq!(calculation.tax_balance(), -42_750);
     }
 
     #[test]

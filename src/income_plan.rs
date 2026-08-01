@@ -208,6 +208,9 @@ pub struct IncomeEntry {
     pub end: Date2026,
     pub payer_role: PayerRole,
     pub adjustment_applies: bool,
+    /// Use this recurring salary's full-year projection as the income basis
+    /// behind a percentage jämkning decision.
+    pub use_full_year_projection_as_adjustment_basis: bool,
     pub custom_withholding_percent: Option<u32>,
     pub vacation_compensation: Option<VacationCompensation>,
     pub regular_pension_premium: Option<RegularPensionPremium>,
@@ -231,6 +234,7 @@ impl IncomeEntry {
             end: Date2026::new(12, 31),
             payer_role: PayerRole::Main,
             adjustment_applies: false,
+            use_full_year_projection_as_adjustment_basis: false,
             custom_withholding_percent: None,
             vacation_compensation: None,
             regular_pension_premium,
@@ -279,6 +283,17 @@ impl IncomeEntry {
         self.annual_amount()
             .saturating_add(self.vacation_compensation_amount())
             .saturating_sub(self.salary_exchange_sacrifice())
+    }
+
+    pub fn full_year_adjustment_basis_amount(&self) -> u32 {
+        if !self.use_full_year_projection_as_adjustment_basis {
+            return 0;
+        }
+        match self.kind {
+            IncomeKind::MonthlySalary => self.amount.saturating_mul(12),
+            IncomeKind::AnnualSalary => self.amount,
+            _ => 0,
+        }
     }
 
     pub fn vacation_compensation_amount(&self) -> u32 {
@@ -523,6 +538,9 @@ impl IncomePlan {
             totals.pension_salary_basis = totals
                 .pension_salary_basis
                 .saturating_add(entry.pension_salary_basis_amount());
+            totals.adjustment_basis_work_income = totals
+                .adjustment_basis_work_income
+                .saturating_add(entry.full_year_adjustment_basis_amount());
             totals.salary_exchange_sacrifice = totals
                 .salary_exchange_sacrifice
                 .saturating_add(entry.salary_exchange_sacrifice());
@@ -644,6 +662,7 @@ pub struct IncomePlanTotals {
     pub pension_income: u32,
     pub dividend_income: u32,
     pub sgi_annual_rate: u32,
+    pub adjustment_basis_work_income: u32,
     pub pension_salary_basis: u32,
     pub regular_pension_premiums: u32,
     pub vacation_pension_premiums: u32,
@@ -756,6 +775,17 @@ mod tests {
         assert_eq!(entry.amount_for_month(10), 54_000);
         assert_eq!(entry.amount_for_month(11), 0);
         assert_eq!(entry.annual_amount(), 891_000);
+    }
+
+    #[test]
+    fn adjustment_basis_projects_recurring_salary_over_the_full_year() {
+        let mut plan = IncomePlan::with_monthly_salary(93_000);
+        plan.entries[0].end = Date2026::new(10, 18);
+        plan.entries[0].use_full_year_projection_as_adjustment_basis = true;
+
+        let totals = plan.totals();
+        assert_eq!(totals.work_income, 891_000);
+        assert_eq!(totals.adjustment_basis_work_income, 1_116_000);
     }
 
     #[test]
@@ -1036,6 +1066,7 @@ mod tests {
                 pension_income: 137_500,
                 dividend_income: 200_000,
                 sgi_annual_rate: 1_116_000,
+                adjustment_basis_work_income: 0,
                 pension_salary_basis: 891_000,
                 regular_pension_premiums: 139_954,
                 vacation_pension_premiums: 0,
