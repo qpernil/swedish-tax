@@ -25,6 +25,9 @@ withholding with annual final tax, and estimates progress toward the 2026 PGI
 and SGI ceilings. Regular salary rows can estimate an ITP 1-equivalent employer
 pension premium, while one-time salary rows can model an editable salary exchange,
 the employer uplift, the remaining pension allowance, and the taxable cash payment.
+Vacation compensation is pensionable by default in the ITP 1-style model and shows
+its estimated additional employer premium separately. Pensionability and actual
+premium amounts remain editable for individually agreed pension terms.
 
 ```sh
 cargo run -p swedish-tax-gui
@@ -42,4 +45,5 @@ programs does not build the graphical application unless it is selected.
 - [2026 pensionable income (PGI)](https://www.skatteverket.se/privat/skatter/arbeteochinkomst/pensionsgrundandeinkomstpgi.4.4f3d00a710cc9ae1c9c80008300.html)
 - [Sickness-benefit qualifying income (SGI)](https://www.forsakringskassan.se/privatperson/sjukpenninggrundande-inkomst-sgi)
 - [2026 ITP 1-equivalent pension-premium benchmark](https://collectum.se/avtal-och-faktura/faktura-och-premier/aktuella-premier-och-basbelopp)
+- [ITP pensionable salary, including vacation compensation](https://collectum.se/administration/sa-rapporterar-du-ratt/pensionsmedforande-lon)
 - [Employer pension-cost deduction rules](https://www4.skatteverket.se/rattsligvagledning/edition/2026.3/339021.html)

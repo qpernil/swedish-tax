@@ -29,6 +29,7 @@ struct Calculation {
     total_tax: u32,
     withheld_tax: u32,
     regular_pension_premiums: u32,
+    vacation_pension_premiums: u32,
     salary_exchange_sacrifice: u32,
     salary_exchange_pension_contributions: u32,
     employer_pension_contributions: u32,
@@ -71,6 +72,7 @@ impl Calculation {
             total_tax,
             withheld_tax,
             regular_pension_premiums: totals.regular_pension_premiums,
+            vacation_pension_premiums: totals.vacation_pension_premiums,
             salary_exchange_sacrifice: totals.salary_exchange_sacrifice,
             salary_exchange_pension_contributions: totals.salary_exchange_pension_contributions,
             employer_pension_contributions: totals.total_employer_pension_contributions(),
@@ -120,8 +122,9 @@ struct TaxApp {
 #[derive(Clone, Copy)]
 struct PensionEditorContext {
     regular_pension_premiums: u32,
+    vacation_pension_premiums: u32,
     total_exchange_contributions: u32,
-    suggested_annual_salary_basis: u32,
+    pension_salary_basis: u32,
 }
 
 impl Default for TaxApp {
@@ -331,11 +334,10 @@ impl TaxApp {
                 let pension_totals = self.income_plan.totals();
                 let pension_context = PensionEditorContext {
                     regular_pension_premiums: pension_totals.regular_pension_premiums,
+                    vacation_pension_premiums: pension_totals.vacation_pension_premiums,
                     total_exchange_contributions: pension_totals
                         .salary_exchange_pension_contributions,
-                    suggested_annual_salary_basis: self
-                        .income_plan
-                        .suggested_annual_pension_salary_basis(),
+                    pension_salary_basis: pension_totals.pension_salary_basis,
                 };
                 let entry_withholding = self
                     .income_plan
@@ -401,6 +403,11 @@ impl TaxApp {
                             ui,
                             "Regular employer pension premiums",
                             format_sek(totals.regular_pension_premiums),
+                        );
+                        value_row(
+                            ui,
+                            "Vacation-payout pension premium",
+                            format_sek(totals.vacation_pension_premiums),
                         );
                         value_row(
                             ui,
@@ -542,6 +549,10 @@ fn income_entry_editor(
             });
 
             if entry.kind != previous_kind {
+                entry.included_in_pension_salary_basis = matches!(
+                    entry.kind,
+                    IncomeKind::AnnualSalary | IncomeKind::MonthlySalary
+                );
                 if matches!(
                     entry.kind,
                     IncomeKind::AnnualSalary | IncomeKind::MonthlySalary
@@ -680,6 +691,10 @@ fn regular_pension_premium_editor(ui: &mut egui::Ui, entry: &mut IncomeEntry) {
         .corner_radius(5.0)
         .inner_margin(10.0)
         .show(ui, |ui| {
+            ui.checkbox(
+                &mut entry.included_in_pension_salary_basis,
+                "Include salary in current-year pension salary basis",
+            );
             let mut enabled = entry.regular_pension_premium.is_some();
             if ui
                 .checkbox(&mut enabled, "Calculate employer tjänstepension")
@@ -752,7 +767,12 @@ fn salary_exchange_editor(
         .saturating_sub(contribution_before_edit);
     let used_before_this_payment = context
         .regular_pension_premiums
+        .saturating_add(context.vacation_pension_premiums)
         .saturating_add(other_exchange_contributions);
+    let current_basis_after_exchange = entry.pension_salary_basis_amount();
+    let other_pension_salary_basis = context
+        .pension_salary_basis
+        .saturating_sub(current_basis_after_exchange);
 
     egui::Frame::new()
         .fill(egui::Color32::from_rgb(244, 250, 246))
@@ -763,6 +783,20 @@ fn salary_exchange_editor(
         .corner_radius(5.0)
         .inner_margin(10.0)
         .show(ui, |ui| {
+            ui.checkbox(
+                &mut entry.included_in_pension_salary_basis,
+                "Include this payment in current-year pension salary basis",
+            )
+            .on_hover_text(
+                "Off by default for a termination payment. Turn it on if the employment agreement treats this cash payment as pensionable salary.",
+            );
+            let payment_in_basis = if entry.included_in_pension_salary_basis {
+                entry.amount
+            } else {
+                0
+            };
+            let pension_salary_basis_before =
+                other_pension_salary_basis.saturating_add(payment_in_basis);
             let mut enabled = entry.salary_exchange.is_some();
             if ui
                 .checkbox(
@@ -772,12 +806,13 @@ fn salary_exchange_editor(
                 .changed()
             {
                 if enabled {
-                    let mut exchange = SalaryExchange::new(context.suggested_annual_salary_basis);
-                    let available = exchange
-                        .allowance_ceiling()
-                        .saturating_sub(used_before_this_payment);
-                    exchange.sacrificed_salary =
-                        exchange.maximum_sacrifice(available).min(entry.amount);
+                    let mut exchange = SalaryExchange::new();
+                    exchange.sacrificed_salary = exchange.maximum_sacrifice(
+                        entry.amount,
+                        pension_salary_basis_before,
+                        used_before_this_payment,
+                        entry.included_in_pension_salary_basis,
+                    );
                     entry.salary_exchange = Some(exchange);
                 } else {
                     entry.salary_exchange = None;
@@ -793,38 +828,36 @@ fn salary_exchange_editor(
             };
 
             ui.add_space(6.0);
-            ui.horizontal_wrapped(|ui| {
-                ui.vertical(|ui| {
-                    ui.label(secondary_label("Annual pensionable salary basis"));
-                    ui.add_sized(
-                        [170.0, 28.0],
-                        egui::DragValue::new(&mut exchange.annual_salary_basis)
-                            .range(0..=MAX_INCOME)
-                            .suffix(" SEK")
-                            .speed(1_000.0),
-                    );
-                });
-                ui.vertical(|ui| {
-                    ui.label(secondary_label("Employer uplift"));
-                    ui.horizontal(|ui| {
-                        ui.checkbox(&mut exchange.employer_adds_uplift, "Added");
-                        if exchange.employer_adds_uplift {
-                            basis_points_percentage_editor(
-                                ui,
-                                "salary-exchange-uplift",
-                                &mut exchange.uplift_basis_points,
-                            );
-                        }
-                    });
+            ui.vertical(|ui| {
+                ui.label(secondary_label("Employer uplift"));
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut exchange.employer_adds_uplift, "Added");
+                    if exchange.employer_adds_uplift {
+                        basis_points_percentage_editor(
+                            ui,
+                            "salary-exchange-uplift",
+                            &mut exchange.uplift_basis_points,
+                        );
+                    }
                 });
             });
 
-            let ceiling = exchange.allowance_ceiling();
-            let available_contribution = ceiling.saturating_sub(used_before_this_payment);
-            let maximum_sacrifice = exchange
-                .maximum_sacrifice(available_contribution)
-                .min(entry.amount);
+            let maximum_sacrifice = exchange.maximum_sacrifice(
+                entry.amount,
+                pension_salary_basis_before,
+                used_before_this_payment,
+                entry.included_in_pension_salary_basis,
+            );
             exchange.sacrificed_salary = exchange.sacrificed_salary.min(maximum_sacrifice);
+            let sacrifice_in_basis = if entry.included_in_pension_salary_basis {
+                exchange.sacrificed_salary
+            } else {
+                0
+            };
+            let pension_salary_basis_after =
+                pension_salary_basis_before.saturating_sub(sacrifice_in_basis);
+            let ceiling = SalaryExchange::allowance_ceiling(pension_salary_basis_after);
+            let available_contribution = ceiling.saturating_sub(used_before_this_payment);
 
             ui.add_space(6.0);
             egui::Grid::new(("salary-exchange-allowance", entry.id))
@@ -834,7 +867,17 @@ fn salary_exchange_editor(
                 .show(ui, |ui| {
                     value_row(
                         ui,
-                        "Indicative employer deduction ceiling",
+                        "Current-year pension salary before exchange",
+                        format_sek(pension_salary_basis_before),
+                    );
+                    value_row(
+                        ui,
+                        "Current-year pension salary after exchange",
+                        format_sek(pension_salary_basis_after),
+                    );
+                    value_row(
+                        ui,
+                        "Indicative employer deduction ceiling after exchange",
                         format_sek(ceiling),
                     );
                     value_row(
@@ -842,6 +885,13 @@ fn salary_exchange_editor(
                         "Regular pension premiums",
                         format_sek(context.regular_pension_premiums),
                     );
+                    if context.vacation_pension_premiums > 0 {
+                        value_row(
+                            ui,
+                            "Vacation-payout pension premium",
+                            format_sek(context.vacation_pension_premiums),
+                        );
+                    }
                     if other_exchange_contributions > 0 {
                         value_row(
                             ui,
@@ -857,7 +907,7 @@ fn salary_exchange_editor(
                 });
             ui.label(
                 egui::RichText::new(
-                    "Main-rule estimate: 35% of the selected annual pensionable salary, capped at 592 000 SEK for 2026.",
+                    "Current-year main-rule estimate: total employer pension premiums may be 35% of pension salary after exchange, capped at 592 000 SEK for 2026.",
                 )
                 .small()
                 .color(secondary_text()),
@@ -972,7 +1022,7 @@ fn vacation_compensation_editor(ui: &mut egui::Ui, entry: &mut IncomeEntry, peri
                 }
             });
 
-            let Some(vacation) = entry.vacation_compensation else {
+            let Some(mut vacation) = entry.vacation_compensation else {
                 ui.label(
                     egui::RichText::new(
                         "Enter the annual entitlement to estimate accrued vacation compensation.",
@@ -999,6 +1049,46 @@ fn vacation_compensation_editor(ui: &mut egui::Ui, entry: &mut IncomeEntry, peri
                 .strong()
                 .color(primary_text()),
             );
+            ui.add_space(5.0);
+            ui.checkbox(
+                &mut vacation.included_in_pension_salary_basis,
+                "Include vacation payout in pension salary basis",
+            )
+            .on_hover_text(
+                "Enabled by default: the ITP1-style estimate treats paid vacation compensation as pensionable when it is paid.",
+            );
+            if vacation.included_in_pension_salary_basis {
+                let vacation_amount = vacation.amount(entry.amount);
+                let benchmark = RegularPensionPremium::benchmark_monthly(
+                    entry.amount.saturating_add(vacation_amount),
+                )
+                .saturating_sub(RegularPensionPremium::benchmark_monthly(entry.amount));
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(format!(
+                        "Estimated additional employer pension premium: {}",
+                        format_sek(benchmark)
+                    ));
+                    let mut use_override = vacation.pension_premium_override.is_some();
+                    if ui
+                        .checkbox(&mut use_override, "Use actual premium")
+                        .changed()
+                    {
+                        vacation.pension_premium_override = use_override.then_some(benchmark);
+                    }
+                    if let Some(actual) = &mut vacation.pension_premium_override {
+                        ui.add_sized(
+                            [145.0, 28.0],
+                            egui::DragValue::new(actual)
+                                .range(0..=MAX_INCOME)
+                                .suffix(" SEK")
+                                .speed(100.0),
+                        );
+                    }
+                });
+            } else {
+                vacation.pension_premium_override = None;
+            }
+            entry.vacation_compensation = Some(vacation);
         });
 }
 
@@ -1328,6 +1418,13 @@ fn comparison(ui: &mut egui::Ui, calculation: Calculation) {
                     ui,
                     "Regular employer pension premiums",
                     format_sek(calculation.regular_pension_premiums),
+                );
+            }
+            if calculation.vacation_pension_premiums > 0 {
+                value_row(
+                    ui,
+                    "Vacation-payout pension premium",
+                    format_sek(calculation.vacation_pension_premiums),
                 );
             }
             if calculation.salary_exchange_sacrifice > 0 {

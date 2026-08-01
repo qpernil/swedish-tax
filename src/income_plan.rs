@@ -124,8 +124,6 @@ impl RegularPensionPremium {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SalaryExchange {
-    /// Annual pensionable salary selected for the employer deduction allowance.
-    pub annual_salary_basis: u32,
     /// Gross one-time salary forgone by the employee.
     pub sacrificed_salary: u32,
     pub employer_adds_uplift: bool,
@@ -134,9 +132,8 @@ pub struct SalaryExchange {
 }
 
 impl SalaryExchange {
-    pub const fn new(annual_salary_basis: u32) -> Self {
+    pub const fn new() -> Self {
         Self {
-            annual_salary_basis,
             sacrificed_salary: 0,
             employer_adds_uplift: true,
             uplift_basis_points: DEFAULT_SALARY_EXCHANGE_UPLIFT_BASIS_POINTS,
@@ -154,28 +151,49 @@ impl SalaryExchange {
         }
     }
 
-    pub fn allowance_ceiling(self) -> u32 {
+    pub fn allowance_ceiling(pension_salary_basis: u32) -> u32 {
         basis_points_rounded(
-            self.annual_salary_basis,
+            pension_salary_basis,
             EMPLOYER_PENSION_ALLOWANCE_RATE_BASIS_POINTS,
         )
         .min(EMPLOYER_PENSION_ALLOWANCE_MAXIMUM)
     }
 
-    pub fn maximum_sacrifice(self, available_contribution_allowance: u32) -> u32 {
-        if !self.employer_adds_uplift {
-            return available_contribution_allowance;
+    pub fn maximum_sacrifice(
+        self,
+        payment_amount: u32,
+        pension_salary_basis_before: u32,
+        pension_contributions_before: u32,
+        payment_is_pensionable: bool,
+    ) -> u32 {
+        let mut low = 0_u32;
+        let mut high = payment_amount;
+        while low < high {
+            let candidate_sacrifice = low + (high - low).div_ceil(2);
+            let pension_salary_basis_after = if payment_is_pensionable {
+                pension_salary_basis_before.saturating_sub(candidate_sacrifice)
+            } else {
+                pension_salary_basis_before
+            };
+            let ceiling = Self::allowance_ceiling(pension_salary_basis_after);
+            let mut candidate = self;
+            candidate.sacrificed_salary = candidate_sacrifice;
+            let valid = pension_contributions_before
+                .saturating_add(candidate.pension_contribution())
+                <= ceiling;
+            if valid {
+                low = candidate_sacrifice;
+            } else {
+                high = candidate_sacrifice - 1;
+            }
         }
-        let denominator = 10_000_u64.saturating_add(u64::from(self.uplift_basis_points));
-        let mut sacrifice = (u64::from(available_contribution_allowance).saturating_mul(10_000)
-            / denominator)
-            .min(u64::from(u32::MAX)) as u32;
-        let mut candidate = self;
-        candidate.sacrificed_salary = sacrifice;
-        if candidate.pension_contribution() > available_contribution_allowance {
-            sacrifice = sacrifice.saturating_sub(1);
-        }
-        sacrifice
+        low
+    }
+}
+
+impl Default for SalaryExchange {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -194,6 +212,9 @@ pub struct IncomeEntry {
     pub vacation_compensation: Option<VacationCompensation>,
     pub regular_pension_premium: Option<RegularPensionPremium>,
     pub salary_exchange: Option<SalaryExchange>,
+    /// Whether cash from this entry is part of the employer's current-year
+    /// occupational-pension salary basis.
+    pub included_in_pension_salary_basis: bool,
 }
 
 impl IncomeEntry {
@@ -214,6 +235,10 @@ impl IncomeEntry {
             vacation_compensation: None,
             regular_pension_premium,
             salary_exchange: None,
+            included_in_pension_salary_basis: matches!(
+                kind,
+                IncomeKind::AnnualSalary | IncomeKind::MonthlySalary
+            ),
         }
     }
 
@@ -281,6 +306,37 @@ impl IncomeEntry {
         }
     }
 
+    pub fn vacation_pension_premium_amount(&self) -> u32 {
+        let Some(vacation) = self.vacation_compensation else {
+            return 0;
+        };
+        if self.kind != IncomeKind::MonthlySalary || !vacation.included_in_pension_salary_basis {
+            return 0;
+        }
+        vacation.pension_premium_override.unwrap_or_else(|| {
+            RegularPensionPremium::benchmark_monthly(
+                self.amount
+                    .saturating_add(self.vacation_compensation_amount()),
+            )
+            .saturating_sub(RegularPensionPremium::benchmark_monthly(self.amount))
+        })
+    }
+
+    pub fn pension_salary_basis_amount(&self) -> u32 {
+        let regular = if self.included_in_pension_salary_basis {
+            self.annual_amount()
+                .saturating_sub(self.salary_exchange_sacrifice())
+        } else {
+            0
+        };
+        let vacation = self
+            .vacation_compensation
+            .filter(|vacation| vacation.included_in_pension_salary_basis)
+            .map(|_| self.vacation_compensation_amount())
+            .unwrap_or(0);
+        regular.saturating_add(vacation)
+    }
+
     pub fn salary_exchange_sacrifice(&self) -> u32 {
         if self.kind != IncomeKind::OneTimeSalary {
             return 0;
@@ -326,6 +382,9 @@ impl IncomeEntry {
 pub struct VacationCompensation {
     pub annual_entitlement_days: u32,
     pub payout_days: u32,
+    pub included_in_pension_salary_basis: bool,
+    /// Actual one-time employer premium attributable to the vacation payout.
+    pub pension_premium_override: Option<u32>,
 }
 
 impl VacationCompensation {
@@ -333,6 +392,8 @@ impl VacationCompensation {
         Self {
             annual_entitlement_days,
             payout_days: Self::suggested_days(annual_entitlement_days, start, end),
+            included_in_pension_salary_basis: true,
+            pension_premium_override: None,
         }
     }
 
@@ -408,38 +469,44 @@ impl IncomePlan {
         self.entries.iter().all(IncomeEntry::is_valid)
     }
 
-    pub fn suggested_annual_pension_salary_basis(&self) -> u32 {
-        self.entries
-            .iter()
-            .filter_map(|entry| match entry.kind {
-                IncomeKind::AnnualSalary => Some(entry.amount),
-                IncomeKind::MonthlySalary => Some(entry.amount.saturating_mul(12)),
-                _ => None,
-            })
-            .max()
-            .unwrap_or(0)
-    }
-
     pub fn salary_exchange_allowance(&self, entry_id: u64) -> Option<SalaryExchangeAllowance> {
         let entry = self.entries.iter().find(|entry| entry.id == entry_id)?;
         let exchange = entry.salary_exchange?;
         let totals = self.totals();
+        let selected_sacrifice = entry.salary_exchange_sacrifice();
         let other_exchange_contributions = totals
             .salary_exchange_pension_contributions
             .saturating_sub(entry.salary_exchange_pension_contribution());
-        let used_before_entry = totals
+        let pension_contributions_before = totals
             .regular_pension_premiums
+            .saturating_add(totals.vacation_pension_premiums)
             .saturating_add(other_exchange_contributions);
-        let ceiling = exchange.allowance_ceiling();
-        let available_contribution = ceiling.saturating_sub(used_before_entry);
+        let sacrifice_in_basis = if entry.included_in_pension_salary_basis {
+            selected_sacrifice
+        } else {
+            0
+        };
+        let pension_salary_basis_before = totals
+            .pension_salary_basis
+            .saturating_add(sacrifice_in_basis);
+        let pension_salary_basis_after =
+            pension_salary_basis_before.saturating_sub(sacrifice_in_basis);
+        let ceiling = SalaryExchange::allowance_ceiling(pension_salary_basis_after);
+        let available_contribution = ceiling.saturating_sub(pension_contributions_before);
         Some(SalaryExchangeAllowance {
             ceiling,
+            pension_salary_basis_before,
+            pension_salary_basis_after,
             regular_pension_premiums: totals.regular_pension_premiums,
+            vacation_pension_premiums: totals.vacation_pension_premiums,
             other_exchange_contributions,
             available_contribution,
-            maximum_sacrifice: exchange
-                .maximum_sacrifice(available_contribution)
-                .min(entry.amount),
+            maximum_sacrifice: exchange.maximum_sacrifice(
+                entry.amount,
+                pension_salary_basis_before,
+                pension_contributions_before,
+                entry.included_in_pension_salary_basis,
+            ),
         })
     }
 
@@ -450,6 +517,12 @@ impl IncomePlan {
             totals.regular_pension_premiums = totals
                 .regular_pension_premiums
                 .saturating_add(entry.regular_pension_premium_amount());
+            totals.vacation_pension_premiums = totals
+                .vacation_pension_premiums
+                .saturating_add(entry.vacation_pension_premium_amount());
+            totals.pension_salary_basis = totals
+                .pension_salary_basis
+                .saturating_add(entry.pension_salary_basis_amount());
             totals.salary_exchange_sacrifice = totals
                 .salary_exchange_sacrifice
                 .saturating_add(entry.salary_exchange_sacrifice());
@@ -571,7 +644,9 @@ pub struct IncomePlanTotals {
     pub pension_income: u32,
     pub dividend_income: u32,
     pub sgi_annual_rate: u32,
+    pub pension_salary_basis: u32,
     pub regular_pension_premiums: u32,
+    pub vacation_pension_premiums: u32,
     pub salary_exchange_sacrifice: u32,
     pub salary_exchange_pension_contributions: u32,
 }
@@ -599,6 +674,7 @@ impl IncomePlanTotals {
 
     pub const fn total_employer_pension_contributions(self) -> u32 {
         self.regular_pension_premiums
+            .saturating_add(self.vacation_pension_premiums)
             .saturating_add(self.salary_exchange_pension_contributions)
     }
 }
@@ -606,7 +682,10 @@ impl IncomePlanTotals {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct SalaryExchangeAllowance {
     pub ceiling: u32,
+    pub pension_salary_basis_before: u32,
+    pub pension_salary_basis_after: u32,
     pub regular_pension_premiums: u32,
+    pub vacation_pension_premiums: u32,
     pub other_exchange_contributions: u32,
     pub available_contribution: u32,
     pub maximum_sacrifice: u32,
@@ -711,13 +790,16 @@ mod tests {
             .find(|entry| entry.id == lump_id)
             .unwrap();
         lump.amount = 372_000;
-        lump.salary_exchange = Some(SalaryExchange::new(1_116_000));
+        lump.salary_exchange = Some(SalaryExchange::new());
 
         let allowance = plan.salary_exchange_allowance(lump_id).unwrap();
-        assert_eq!(allowance.ceiling, 390_600);
+        assert_eq!(allowance.pension_salary_basis_before, 1_006_883);
+        assert_eq!(allowance.pension_salary_basis_after, 1_006_883);
+        assert_eq!(allowance.ceiling, 352_409);
         assert_eq!(allowance.regular_pension_premiums, 139_954);
-        assert_eq!(allowance.available_contribution, 250_646);
-        assert_eq!(allowance.maximum_sacrifice, 236_995);
+        assert_eq!(allowance.vacation_pension_premiums, 34_765);
+        assert_eq!(allowance.available_contribution, 177_690);
+        assert_eq!(allowance.maximum_sacrifice, 168_012);
 
         plan.entries
             .iter_mut()
@@ -745,10 +827,10 @@ mod tests {
             .sacrificed_salary = allowance.maximum_sacrifice;
 
         let totals = plan.totals();
-        assert_eq!(totals.work_income, 1_141_888);
-        assert_eq!(totals.salary_exchange_sacrifice, 236_995);
-        assert_eq!(totals.salary_exchange_pension_contributions, 250_646);
-        assert_eq!(totals.total_employer_pension_contributions(), 390_600);
+        assert_eq!(totals.work_income, 1_210_871);
+        assert_eq!(totals.salary_exchange_sacrifice, 168_012);
+        assert_eq!(totals.salary_exchange_pension_contributions, 177_689);
+        assert_eq!(totals.total_employer_pension_contributions(), 352_408);
     }
 
     #[test]
@@ -762,10 +844,33 @@ mod tests {
 
         assert_eq!(entry.vacation_compensation.unwrap().payout_days, 24);
         assert_eq!(entry.vacation_compensation_amount(), 115_883);
+        assert_eq!(entry.vacation_pension_premium_amount(), 34_765);
+        assert_eq!(entry.pension_salary_basis_amount(), 1_006_883);
         assert_eq!(entry.total_annual_amount(), 1_006_883);
 
         entry.vacation_compensation.as_mut().unwrap().payout_days = 20;
         assert_eq!(entry.vacation_compensation_amount(), 96_569);
+    }
+
+    #[test]
+    fn pensionability_and_actual_vacation_premium_are_editable() {
+        let mut entry = IncomeEntry::new(1, IncomeKind::MonthlySalary);
+        entry.amount = 93_000;
+        entry.end = Date2026::new(10, 18);
+        entry.vacation_compensation =
+            Some(VacationCompensation::suggested(30, entry.start, entry.end));
+
+        let vacation = entry.vacation_compensation.as_mut().unwrap();
+        vacation.pension_premium_override = Some(30_000);
+        assert_eq!(entry.vacation_pension_premium_amount(), 30_000);
+
+        entry
+            .vacation_compensation
+            .as_mut()
+            .unwrap()
+            .included_in_pension_salary_basis = false;
+        assert_eq!(entry.vacation_pension_premium_amount(), 0);
+        assert_eq!(entry.pension_salary_basis_amount(), 891_000);
     }
 
     #[test]
@@ -867,7 +972,9 @@ mod tests {
                 pension_income: 137_500,
                 dividend_income: 200_000,
                 sgi_annual_rate: 1_116_000,
+                pension_salary_basis: 891_000,
                 regular_pension_premiums: 139_954,
+                vacation_pension_premiums: 0,
                 salary_exchange_sacrifice: 0,
                 salary_exchange_pension_contributions: 0,
             }
