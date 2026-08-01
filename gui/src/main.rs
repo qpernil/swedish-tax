@@ -388,69 +388,10 @@ impl TaxApp {
                 ui.add_space(12.0);
                 ui.separator();
                 ui.add_space(8.0);
-                let totals = self.income_plan.totals();
                 let withholding = self
                     .income_plan
                     .estimated_withholding(self.table, self.age_group);
-                let pension_component_count = [
-                    totals.regular_pension_premiums,
-                    totals.vacation_pension_premiums,
-                    totals.salary_exchange_pension_contributions,
-                ]
-                .into_iter()
-                .filter(|amount| *amount > 0)
-                .count();
-                egui::Grid::new("income-calculator-totals")
-                    .num_columns(2)
-                    .striped(true)
-                    .show(ui, |ui| {
-                        value_row(ui, "Salary and compensation", format_sek(totals.work_income));
-                        value_row(ui, "Tjänstepension", format_sek(totals.pension_income));
-                        value_row(ui, "Own-AB dividend", format_sek(totals.dividend_income));
-                        if pension_component_count > 1 {
-                            if totals.regular_pension_premiums > 0 {
-                                value_row(
-                                    ui,
-                                    "Regular pension premium",
-                                    format_sek(totals.regular_pension_premiums),
-                                );
-                            }
-                            if totals.vacation_pension_premiums > 0 {
-                                value_row(
-                                    ui,
-                                    "Vacation-payout pension premium",
-                                    format_sek(totals.vacation_pension_premiums),
-                                );
-                            }
-                            if totals.salary_exchange_pension_contributions > 0 {
-                                value_row(
-                                    ui,
-                                    "Salary-exchange pension deposit",
-                                    format_sek(totals.salary_exchange_pension_contributions),
-                                );
-                            }
-                        }
-                        if totals.salary_exchange_sacrifice > 0 {
-                            value_row(
-                                ui,
-                                "Salary exchanged",
-                                format_sek(totals.salary_exchange_sacrifice),
-                            );
-                        }
-                        if pension_component_count > 0 {
-                            value_row(
-                                ui,
-                                if pension_component_count > 1 {
-                                    "Total employer pension contributions"
-                                } else {
-                                    "Employer pension contributions"
-                                },
-                                format_sek(totals.total_employer_pension_contributions()),
-                            );
-                        }
-                        value_row(ui, "Total annual income", format_sek(totals.gross_income()));
-                        value_row(ui, "Estimated tax withheld", format_sek(withholding.total));
-                    });
+                income_calculation_breakdown(ui, &self.income_plan, withholding.total);
             });
 
         self.income_editor_open = open && !close_requested;
@@ -520,6 +461,157 @@ fn adjustment_editor(ui: &mut egui::Ui, plan: &mut IncomePlan) {
                     );
                 }
             });
+        });
+}
+
+fn income_calculation_breakdown(ui: &mut egui::Ui, plan: &IncomePlan, withheld_tax: u32) {
+    let totals = plan.totals();
+    egui::Frame::new()
+        .fill(surface_color())
+        .stroke(egui::Stroke::new(1.0, border_color()))
+        .corner_radius(6.0)
+        .inner_margin(12.0)
+        .show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.label(
+                egui::RichText::new("Annual overview")
+                    .strong()
+                    .size(16.0)
+                    .color(primary_text()),
+            );
+            ui.label(
+                egui::RichText::new(
+                    "Each editable income appears once. Employer pension deposits are separate from cash income.",
+                )
+                .small()
+                .color(secondary_text()),
+            );
+            ui.add_space(6.0);
+
+            egui::Grid::new("income-entry-summary")
+                .num_columns(5)
+                .striped(true)
+                .min_col_width(112.0)
+                .show(ui, |ui| {
+                    ui.label(secondary_label("Income entry"));
+                    ui.label(secondary_label("Gross cash"));
+                    ui.label(secondary_label("Salary exchange"));
+                    ui.label(secondary_label("Cash income"));
+                    ui.label(secondary_label("Employer pension"));
+                    ui.end_row();
+
+                    for (index, entry) in plan.entries.iter().enumerate() {
+                        let name = if entry.description.trim().is_empty() {
+                            format!("Entry {}", index + 1)
+                        } else {
+                            entry.description.trim().to_owned()
+                        };
+                        let vacation = entry.vacation_compensation_amount();
+                        let gross_cash = entry.annual_amount().saturating_add(vacation);
+                        let exchange = entry.salary_exchange_sacrifice();
+                        let cash_income = entry.total_annual_amount();
+                        let employer_pension = entry
+                            .regular_pension_premium_amount()
+                            .saturating_add(entry.vacation_pension_premium_amount())
+                            .saturating_add(entry.salary_exchange_pension_contribution());
+
+                        ui.vertical(|ui| {
+                            ui.label(egui::RichText::new(name).strong());
+                            ui.label(
+                                egui::RichText::new(entry.kind.label())
+                                    .small()
+                                    .color(secondary_text()),
+                            );
+                            if entry.kind.is_monthly() {
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "{} {} to {} {}",
+                                        month_name(entry.start.month),
+                                        entry.start.day,
+                                        month_name(entry.end.month),
+                                        entry.end.day,
+                                    ))
+                                    .small()
+                                    .color(secondary_text()),
+                                );
+                            }
+                            if vacation > 0 {
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "Includes {} vacation compensation",
+                                        format_sek(vacation)
+                                    ))
+                                    .small()
+                                    .color(secondary_text()),
+                                );
+                            }
+                        });
+                        ui.label(format_sek(gross_cash));
+                        ui.label(if exchange > 0 {
+                            format!("−{}", format_sek(exchange))
+                        } else {
+                            "—".to_owned()
+                        });
+                        ui.label(format_sek(cash_income));
+                        ui.label(if employer_pension > 0 {
+                            format_sek(employer_pension)
+                        } else {
+                            "—".to_owned()
+                        });
+                        ui.end_row();
+                    }
+
+                    let total_gross_cash = totals
+                        .gross_income()
+                        .saturating_add(totals.salary_exchange_sacrifice);
+                    ui.label(egui::RichText::new("Total").strong());
+                    ui.label(egui::RichText::new(format_sek(total_gross_cash)).strong());
+                    ui.label(
+                        egui::RichText::new(if totals.salary_exchange_sacrifice > 0 {
+                            format!(
+                                "−{}",
+                                format_sek(totals.salary_exchange_sacrifice)
+                            )
+                        } else {
+                            "—".to_owned()
+                        })
+                        .strong(),
+                    );
+                    ui.label(egui::RichText::new(format_sek(totals.gross_income())).strong());
+                    ui.label(
+                        egui::RichText::new(format_sek(
+                            totals.total_employer_pension_contributions(),
+                        ))
+                        .strong(),
+                    );
+                    ui.end_row();
+                });
+
+            ui.add_space(12.0);
+            ui.label(
+                egui::RichText::new("Cash-income totals used by the tax calculation")
+                    .strong()
+                    .color(primary_text()),
+            );
+            egui::Grid::new("income-tax-category-totals")
+                .num_columns(2)
+                .striped(true)
+                .min_col_width(280.0)
+                .show(ui, |ui| {
+                    value_row(
+                        ui,
+                        "Salary and compensation",
+                        format_sek(totals.work_income),
+                    );
+                    if totals.pension_income > 0 {
+                        value_row(ui, "Tjänstepension received", format_sek(totals.pension_income));
+                    }
+                    if totals.dividend_income > 0 {
+                        value_row(ui, "Own-AB dividend", format_sek(totals.dividend_income));
+                    }
+                    value_row(ui, "Total cash income", format_sek(totals.gross_income()));
+                    value_row(ui, "Estimated tax withheld", format_sek(withheld_tax));
+                });
         });
 }
 
