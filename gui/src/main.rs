@@ -1,7 +1,7 @@
 use eframe::egui;
 use swedish_tax::{
-    AnnualTax, MAX_TAX_TABLE, MIN_TAX_TABLE, TaxColumn, TaxDeduction, annual_tax, marginal_rate,
-    monthly_deduction,
+    AnnualTax, IncomeBasisEstimate, MAX_TAX_TABLE, MIN_TAX_TABLE, TaxColumn, TaxDeduction,
+    annual_tax, estimated_sgi_progress, marginal_rate, monthly_deduction, public_pension_progress,
 };
 
 const MAX_INCOME: u32 = 100_000_000;
@@ -28,6 +28,8 @@ struct Calculation {
     table_deduction: TaxDeduction,
     annual_tax: AnnualTax,
     marginal_rate: f64,
+    pension_progress: IncomeBasisEstimate,
+    sgi_progress: IncomeBasisEstimate,
 }
 
 impl Calculation {
@@ -39,6 +41,8 @@ impl Calculation {
         let table_deduction = monthly_deduction(table, column, monthly_income)?;
         let annual_tax = annual_tax(table, column, annual_income)?;
         let marginal_rate = marginal_rate(table, column, monthly_income)?;
+        let pension_progress = public_pension_progress(column, annual_income);
+        let sgi_progress = estimated_sgi_progress(column, annual_income);
 
         Some(Self {
             monthly_income,
@@ -46,6 +50,8 @@ impl Calculation {
             table_deduction,
             annual_tax,
             marginal_rate,
+            pension_progress,
+            sgi_progress,
         })
     }
 
@@ -220,6 +226,11 @@ impl TaxApp {
 
         ui.add_space(24.0);
         comparison(ui, calculation);
+
+        ui.add_space(24.0);
+        ui.separator();
+        ui.add_space(18.0);
+        income_basis_ceiling_progress(ui, calculation);
 
         ui.add_space(24.0);
         ui.separator();
@@ -488,6 +499,105 @@ fn comparison(ui: &mut egui::Ui, calculation: Calculation) {
         });
 }
 
+fn income_basis_ceiling_progress(ui: &mut egui::Ui, calculation: Calculation) {
+    let heading = ui.label(
+        egui::RichText::new("Income-basis ceilings")
+            .strong()
+            .size(17.0)
+            .color(primary_text()),
+    );
+    heading.on_hover_ui(income_basis_help);
+    ui.add_space(4.0);
+    ui.label(
+        egui::RichText::new("Estimates based only on the selected annual income.")
+            .small()
+            .color(secondary_text()),
+    );
+    ui.add_space(8.0);
+
+    egui::Grid::new("income-basis-ceilings-grid")
+        .num_columns(2)
+        .striped(true)
+        .min_col_width(220.0)
+        .show(ui, |ui| {
+            income_basis_row(
+                ui,
+                "Allmän pension (PGI)",
+                calculation.pension_progress,
+                "Selected income does not earn new pension rights",
+                "Requires the assumed income used for the compensation",
+            );
+            income_basis_row(
+                ui,
+                "Estimated SGI",
+                calculation.sgi_progress,
+                "SGI is not based on this selected income",
+                "Requires additional income information",
+            );
+        });
+}
+
+fn income_basis_row(
+    ui: &mut egui::Ui,
+    label: &str,
+    estimate: IncomeBasisEstimate,
+    not_based_text: &str,
+    additional_information_text: &str,
+) {
+    ui.label(egui::RichText::new(label).color(secondary_text()));
+    match estimate {
+        IncomeBasisEstimate::Estimated(progress) => {
+            ui.vertical(|ui| {
+                let percent = progress.percent_of_maximum();
+                ui.add(
+                    egui::ProgressBar::new((percent / 100.0) as f32)
+                        .desired_width(280.0)
+                        .text(format!("{percent:.1}% of 2026 maximum")),
+                );
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{} / {}",
+                        format_sek(progress.estimated_basis),
+                        format_sek(progress.maximum_basis),
+                    ))
+                    .small()
+                    .color(secondary_text()),
+                );
+            });
+        }
+        IncomeBasisEstimate::NotBasedOnSelectedIncome => {
+            ui.label(egui::RichText::new(not_based_text).color(secondary_text()));
+        }
+        IncomeBasisEstimate::RequiresAdditionalInformation => {
+            ui.label(egui::RichText::new(additional_information_text).color(secondary_text()));
+        }
+    }
+    ui.end_row();
+}
+
+fn income_basis_help(ui: &mut egui::Ui) {
+    ui.set_max_width(420.0);
+    ui.label(egui::RichText::new("How the estimates are calculated").strong());
+    ui.add_space(4.0);
+    ui.label(
+        "PGI is estimated after the general pension fee and compared with the 2026 maximum of \
+         625,500 SEK.",
+    );
+    ui.add_space(4.0);
+    ui.label(
+        "SGI is estimated from recurring salary and compared with the 2026 maximum of 592,000 \
+         SEK. Försäkringskassan determines the actual SGI when a benefit is claimed.",
+    );
+    ui.add_space(4.0);
+    ui.label(
+        egui::RichText::new(
+            "SGI is the basis for sickness benefit and other social-insurance benefits; employer-paid sickness pay follows separate rules.",
+        )
+        .small()
+        .color(secondary_text()),
+    );
+}
+
 fn annual_breakdown(ui: &mut egui::Ui, tax: AnnualTax) {
     egui::Grid::new("annual-breakdown-grid")
         .num_columns(2)
@@ -672,6 +782,14 @@ mod tests {
             annual_tax(34, TaxColumn::Column1, 216_000).unwrap()
         );
         assert_eq!(
+            calculation.pension_progress,
+            public_pension_progress(TaxColumn::Column1, 216_000)
+        );
+        assert_eq!(
+            calculation.sgi_progress,
+            estimated_sgi_progress(TaxColumn::Column1, 216_000)
+        );
+        assert_eq!(
             calculation.formula_monthly_tax(),
             calculation.annual_tax.total / 12
         );
@@ -692,6 +810,25 @@ mod tests {
             calculation.annual_tax,
             annual_tax(32, TaxColumn::Column3, 420_011).unwrap()
         );
+        assert_eq!(
+            calculation.pension_progress,
+            public_pension_progress(TaxColumn::Column3, 420_011)
+        );
+        assert_eq!(
+            calculation.sgi_progress,
+            estimated_sgi_progress(TaxColumn::Column3, 420_011)
+        );
+    }
+
+    #[test]
+    fn monthly_and_annual_inputs_produce_the_same_income_basis_progress() {
+        let monthly =
+            Calculation::new(32, TaxColumn::Column1, IncomePeriod::Monthly, 35_000).unwrap();
+        let annual =
+            Calculation::new(32, TaxColumn::Column1, IncomePeriod::Annual, 420_000).unwrap();
+
+        assert_eq!(monthly.pension_progress, annual.pension_progress);
+        assert_eq!(monthly.sgi_progress, annual.sgi_progress);
     }
 
     #[test]

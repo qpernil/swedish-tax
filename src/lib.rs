@@ -15,6 +15,14 @@
 //! rows are returned as percentages so callers can apply the required
 //! rounding policy explicitly.
 
+mod income_bases;
+
+pub use income_bases::{
+    estimated_sgi_progress, public_pension_progress, IncomeBasisEstimate, IncomeBasisProgress,
+    GENERAL_PENSION_FEE_INCOME_CEILING, MAXIMUM_PENSIONABLE_INCOME, MAXIMUM_SGI,
+    MINIMUM_PENSIONABLE_INCOME, MINIMUM_SGI_INCOME,
+};
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub enum TaxColumn {
@@ -224,10 +232,14 @@ fn enhanced_basic_allowance_part_scaled(income: u32) -> i128 {
 }
 
 fn pension_fee(income: u32) -> u32 {
-    if income < 25_042 {
+    if income < MINIMUM_PENSIONABLE_INCOME {
         return 0;
     }
-    let raw = ratio(scaled(income.min(673_038)), 7, 100);
+    let raw = ratio(
+        scaled(income.min(GENERAL_PENSION_FEE_INCOME_CEILING)),
+        7,
+        100,
+    );
     (((raw + 50 * SCALE - 1) / (100 * SCALE)) * 100) as u32
 }
 
