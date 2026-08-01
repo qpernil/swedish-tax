@@ -292,12 +292,10 @@ impl TaxApp {
         ui.add_space(24.0);
         annual_reconciliation(ui, calculation);
 
-        if has_uniform_monthly_table_reference(&self.income_plan) {
-            ui.add_space(24.0);
-            ui.separator();
-            ui.add_space(18.0);
-            monthly_table_reference(ui, calculation, self.table, self.age_group.salary_column());
-        }
+        ui.add_space(24.0);
+        ui.separator();
+        ui.add_space(18.0);
+        monthly_table_reference(ui, calculation, self.table, self.age_group.salary_column());
 
         ui.add_space(24.0);
         ui.separator();
@@ -1678,7 +1676,7 @@ fn monthly_table_reference(
     salary_column: TaxColumn,
 ) {
     ui.label(
-        egui::RichText::new("Monthly table reference")
+        egui::RichText::new("Average monthly equivalent")
             .strong()
             .size(17.0)
             .color(primary_text()),
