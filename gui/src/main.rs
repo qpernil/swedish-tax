@@ -117,6 +117,7 @@ struct TaxApp {
     age_group: TaxAgeGroup,
     income_plan: IncomePlan,
     income_editor_open: bool,
+    income_entry_to_reveal: Option<u64>,
 }
 
 #[derive(Clone, Copy)]
@@ -134,6 +135,7 @@ impl Default for TaxApp {
             age_group: TaxAgeGroup::Under66AtYearStart,
             income_plan: IncomePlan::with_monthly_salary(DEFAULT_MONTHLY_INCOME),
             income_editor_open: false,
+            income_entry_to_reveal: None,
         }
     }
 }
@@ -142,6 +144,12 @@ impl TaxApp {
     fn new(context: &eframe::CreationContext<'_>) -> Self {
         configure_style(&context.egui_ctx);
         Self::default()
+    }
+
+    fn add_income_for_editing(&mut self) -> u64 {
+        let id = self.income_plan.add_entry(IncomeKind::AnnualSalary);
+        self.income_entry_to_reveal = Some(id);
+        id
     }
 
     fn controls(&mut self, ui: &mut egui::Ui) {
@@ -347,17 +355,19 @@ impl TaxApp {
                     .max_height(500.0)
                     .show(ui, |ui| {
                         for entry in &mut self.income_plan.entries {
+                            let reveal = self.income_entry_to_reveal == Some(entry.id);
                             let withholding = entry_withholding
                                 .iter()
                                 .find(|estimate| estimate.entry_id == entry.id)
                                 .copied();
-                            ui.push_id(("income-entry", entry.id), |ui| {
+                            let entry_response = ui.push_id(("income-entry", entry.id), |ui| {
                                 income_entry_editor(
                                     ui,
                                     entry,
                                     adjustment_percent,
                                     withholding,
                                     pension_context,
+                                    reveal,
                                 );
                                 if ui
                                     .small_button("Remove this income")
@@ -367,6 +377,12 @@ impl TaxApp {
                                     remove_id = Some(entry.id);
                                 }
                             });
+                            if reveal {
+                                entry_response
+                                    .response
+                                    .scroll_to_me(Some(egui::Align::TOP));
+                                self.income_entry_to_reveal = None;
+                            }
                             ui.add_space(8.0);
                         }
                     });
@@ -376,7 +392,7 @@ impl TaxApp {
 
                 ui.horizontal(|ui| {
                     if ui.button("+ Add another income").clicked() {
-                        self.income_plan.add_entry(IncomeKind::AnnualSalary);
+                        self.add_income_for_editing();
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.button("Done").clicked() {
@@ -621,6 +637,7 @@ fn income_entry_editor(
     adjustment: Option<u32>,
     withholding: Option<EntryWithholding>,
     pension_context: PensionEditorContext,
+    focus_description: bool,
 ) {
     egui::Frame::new()
         .fill(surface_color())
@@ -632,11 +649,14 @@ fn income_entry_editor(
             ui.horizontal_wrapped(|ui| {
                 ui.vertical(|ui| {
                     ui.label(secondary_label("Description"));
-                    ui.add_sized(
+                    let description_response = ui.add_sized(
                         [190.0, 26.0],
                         egui::TextEdit::singleline(&mut entry.description)
                             .hint_text("Employer or payment"),
                     );
+                    if focus_description {
+                        description_response.request_focus();
+                    }
                 });
                 ui.vertical(|ui| {
                     ui.label(secondary_label("Income type"));
@@ -1888,6 +1908,15 @@ mod tests {
     #[test]
     fn table_32_is_selected_by_default() {
         assert_eq!(TaxApp::default().table, 32);
+    }
+
+    #[test]
+    fn newly_added_income_is_marked_for_reveal_and_editing() {
+        let mut app = TaxApp::default();
+        let id = app.add_income_for_editing();
+
+        assert_eq!(app.income_entry_to_reveal, Some(id));
+        assert_eq!(app.income_plan.entries.last().unwrap().id, id);
     }
 
     #[test]
