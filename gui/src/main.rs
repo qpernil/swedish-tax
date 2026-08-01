@@ -1398,7 +1398,7 @@ fn comparison(ui: &mut egui::Ui, calculation: Calculation) {
             );
             value_row(
                 ui,
-                "Annual salary and pension",
+                "Taxable salary and pension",
                 format_sek(calculation.ordinary_income),
             );
             if calculation.dividend_income > 0 {
@@ -1407,12 +1407,12 @@ fn comparison(ui: &mut egui::Ui, calculation: Calculation) {
                     "Own-AB dividend",
                     format_sek(calculation.dividend_income),
                 );
+                value_row(
+                    ui,
+                    "Total income including dividend",
+                    format_sek(calculation.annual_income),
+                );
             }
-            value_row(
-                ui,
-                "Total annual income",
-                format_sek(calculation.annual_income),
-            );
             if calculation.regular_pension_premiums > 0 {
                 value_row(
                     ui,
