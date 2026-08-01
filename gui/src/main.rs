@@ -209,14 +209,24 @@ impl TaxApp {
 
                     ui.add_space(12.0);
                     ui.vertical(|ui| {
-                        ui.label(secondary_label("Average monthly taxable income"));
-                        let monthly_income = self.income_plan.totals().monthly_taxable_income();
+                        let simple_monthly = has_uniform_monthly_table_reference(&self.income_plan);
+                        let totals = self.income_plan.totals();
+                        ui.label(secondary_label(if simple_monthly {
+                            "Monthly income"
+                        } else {
+                            "Annual income plan"
+                        }));
                         if ui
                             .add_sized(
                                 [210.0, 28.0],
                                 egui::Button::new(format!(
-                                    "{} / month  ·  Edit…",
-                                    format_sek(monthly_income)
+                                    "{} {}  ·  Edit…",
+                                    format_sek(if simple_monthly {
+                                        totals.monthly_taxable_income()
+                                    } else {
+                                        totals.gross_income()
+                                    }),
+                                    if simple_monthly { "/ month" } else { "/ year" }
                                 )),
                             )
                             .clicked()
@@ -282,10 +292,12 @@ impl TaxApp {
         ui.add_space(24.0);
         annual_reconciliation(ui, calculation);
 
-        ui.add_space(24.0);
-        ui.separator();
-        ui.add_space(18.0);
-        monthly_table_reference(ui, calculation, self.table, self.age_group.salary_column());
+        if has_uniform_monthly_table_reference(&self.income_plan) {
+            ui.add_space(24.0);
+            ui.separator();
+            ui.add_space(18.0);
+            monthly_table_reference(ui, calculation, self.table, self.age_group.salary_column());
+        }
 
         ui.add_space(24.0);
         ui.separator();
@@ -1360,6 +1372,27 @@ fn income_eligibility(kind: IncomeKind) -> &'static str {
     }
 }
 
+fn has_uniform_monthly_table_reference(plan: &IncomePlan) -> bool {
+    let [entry] = plan.entries.as_slice() else {
+        return false;
+    };
+    if entry.payer_role != PayerRole::Main
+        || entry.adjustment_applies
+        || entry.custom_withholding_percent.is_some()
+        || entry.vacation_compensation_amount() > 0
+    {
+        return false;
+    }
+    match entry.kind {
+        IncomeKind::AnnualSalary => true,
+        IncomeKind::MonthlySalary => {
+            entry.start.clamped() == Date2026::new(1, 1)
+                && entry.end.clamped() == Date2026::new(12, 31)
+        }
+        _ => false,
+    }
+}
+
 fn eligibility_badge(text: &str) -> egui::RichText {
     egui::RichText::new(text)
         .small()
@@ -1955,6 +1988,21 @@ mod tests {
 
         assert_eq!(app.income_entry_to_reveal, Some(id));
         assert_eq!(app.income_plan.entries.last().unwrap().id, id);
+    }
+
+    #[test]
+    fn monthly_table_reference_requires_one_uniform_full_year_salary() {
+        let mut plan = IncomePlan::with_monthly_salary(93_000);
+        assert!(has_uniform_monthly_table_reference(&plan));
+
+        plan.entries[0].end = Date2026::new(10, 18);
+        assert!(!has_uniform_monthly_table_reference(&plan));
+
+        plan = IncomePlan::with_annual_salary(1_116_000);
+        assert!(has_uniform_monthly_table_reference(&plan));
+
+        plan.add_entry(IncomeKind::AnnualOccupationalPension);
+        assert!(!has_uniform_monthly_table_reference(&plan));
     }
 
     #[test]
