@@ -19,7 +19,7 @@ Arguments are tax table, column, and gross income in whole SEK.
 
 The native egui application includes a reopenable income calculator for
 salary, one-time compensation, occupational pension, and dividends within the
-owner-managed company's gränsbelopp. It estimates the withholding applied by main
+owner-managed company's gränsbelopp. It calculates the withholding applied by main
 and secondary payers (including percentage adjustment decisions), reconciles
 withholding with annual final tax, and estimates progress toward the 2026 PGI
 and SGI ceilings. Regular salary rows can estimate an ITP 1-equivalent employer

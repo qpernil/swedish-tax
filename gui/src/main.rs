@@ -610,7 +610,7 @@ fn income_calculation_breakdown(ui: &mut egui::Ui, plan: &IncomePlan, withheld_t
                         value_row(ui, "Own-AB dividend", format_sek(totals.dividend_income));
                     }
                     value_row(ui, "Total cash income", format_sek(totals.gross_income()));
-                    value_row(ui, "Estimated tax withheld", format_sek(withheld_tax));
+                    value_row(ui, "Calculated tax withheld", format_sek(withheld_tax));
                 });
         });
 }
@@ -786,7 +786,7 @@ fn income_entry_editor(
                 ui.add_space(6.0);
                 ui.label(
                     egui::RichText::new(format!(
-                        "Estimated withheld: {} · {}",
+                        "Calculated withholding: {} · {}",
                         format_sek(withholding.withheld),
                         withholding_rule_text(withholding.rule),
                     ))
@@ -1600,7 +1600,7 @@ fn comparison(ui: &mut egui::Ui, calculation: Calculation) {
             );
             value_row(
                 ui,
-                "Estimated tax withheld",
+                "Calculated tax withheld",
                 format_sek(calculation.withheld_tax),
             );
             value_row(
