@@ -497,7 +497,7 @@ fn income_calculation_breakdown(ui: &mut egui::Ui, plan: &IncomePlan, withheld_t
             );
             ui.label(
                 egui::RichText::new(
-                    "Each editable income appears once. Employer pension deposits are separate from cash income.",
+                    "Each editable income appears once. Employer pension contributions are separate from cash income.",
                 )
                 .small()
                 .color(secondary_text()),
@@ -840,9 +840,11 @@ fn regular_pension_premium_editor(ui: &mut egui::Ui, entry: &mut IncomeEntry) {
             }
             let Some(mut premium) = entry.regular_pension_premium else {
                 ui.label(
-                    egui::RichText::new("No employer pension premium included for this salary.")
-                        .small()
-                        .color(secondary_text()),
+                    egui::RichText::new(
+                        "No employer pension contribution included for this salary.",
+                    )
+                    .small()
+                    .color(secondary_text()),
                 );
                 return;
             };
@@ -865,7 +867,7 @@ fn regular_pension_premium_editor(ui: &mut egui::Ui, entry: &mut IncomeEntry) {
                 ui.label(format!("Benchmark: {}", format_sek(benchmark)));
                 let mut use_override = premium.monthly_override.is_some();
                 if ui
-                    .checkbox(&mut use_override, "Use actual monthly premium")
+                    .checkbox(&mut use_override, "Use actual monthly contribution")
                     .changed()
                 {
                     premium.monthly_override = use_override.then_some(benchmark);
@@ -883,7 +885,7 @@ fn regular_pension_premium_editor(ui: &mut egui::Ui, entry: &mut IncomeEntry) {
             entry.regular_pension_premium = Some(premium);
             ui.label(
                 egui::RichText::new(format!(
-                    "Estimated premium for this salary period: {}",
+                    "Estimated contribution for this salary period: {}",
                     format_sek(entry.regular_pension_premium_amount()),
                 ))
                 .strong()
@@ -1018,20 +1020,20 @@ fn salary_exchange_editor(
                     );
                     value_row(
                         ui,
-                        "Regular pension premiums",
+                        "Regular pension contributions",
                         format_sek(context.regular_pension_premiums),
                     );
                     if context.vacation_pension_premiums > 0 {
                         value_row(
                             ui,
-                            "Vacation-payout pension premium",
+                            "Vacation-payout pension contribution",
                             format_sek(context.vacation_pension_premiums),
                         );
                     }
                     if other_exchange_contributions > 0 {
                         value_row(
                             ui,
-                            "Other salary-exchange deposits",
+                            "Other salary-exchange contributions",
                             format_sek(other_exchange_contributions),
                         );
                     }
@@ -1043,7 +1045,7 @@ fn salary_exchange_editor(
                 });
             ui.label(
                 egui::RichText::new(
-                    "Current-year main-rule estimate: total employer pension premiums may be 35% of pension salary after exchange, capped at 592 000 SEK for 2026.",
+                    "Current-year main-rule estimate: total employer pension contributions may be 35% of pension salary after exchange, capped at 592 000 SEK for 2026.",
                 )
                 .small()
                 .color(secondary_text()),
@@ -1076,7 +1078,7 @@ fn salary_exchange_editor(
             ui.horizontal_wrapped(|ui| {
                 ui.label(
                     egui::RichText::new(format!(
-                        "Pension deposit: {}",
+                        "Employer pension contribution: {}",
                         format_sek(pension_contribution)
                     ))
                     .strong()
@@ -1201,12 +1203,12 @@ fn vacation_compensation_editor(ui: &mut egui::Ui, entry: &mut IncomeEntry, peri
                 .saturating_sub(RegularPensionPremium::benchmark_monthly(entry.amount));
                 ui.horizontal_wrapped(|ui| {
                     ui.label(format!(
-                        "Estimated additional employer pension premium: {}",
+                        "Estimated additional employer pension contribution: {}",
                         format_sek(benchmark)
                     ));
                     let mut use_override = vacation.pension_premium_override.is_some();
                     if ui
-                        .checkbox(&mut use_override, "Use actual premium")
+                        .checkbox(&mut use_override, "Use actual contribution")
                         .changed()
                     {
                         vacation.pension_premium_override = use_override.then_some(benchmark);
@@ -1561,21 +1563,21 @@ fn comparison(ui: &mut egui::Ui, calculation: Calculation) {
                 if calculation.regular_pension_premiums > 0 {
                     value_row(
                         ui,
-                        "Regular pension premium",
+                        "Regular pension contribution",
                         format_sek(calculation.regular_pension_premiums),
                     );
                 }
                 if calculation.vacation_pension_premiums > 0 {
                     value_row(
                         ui,
-                        "Vacation-payout pension premium",
+                        "Vacation-payout pension contribution",
                         format_sek(calculation.vacation_pension_premiums),
                     );
                 }
                 if calculation.salary_exchange_pension_contributions > 0 {
                     value_row(
                         ui,
-                        "Salary-exchange pension deposit",
+                        "Salary-exchange pension contribution",
                         format_sek(calculation.salary_exchange_pension_contributions),
                     );
                 }
