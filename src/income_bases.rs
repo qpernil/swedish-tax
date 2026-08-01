@@ -67,6 +67,11 @@ pub fn public_pension_progress(column: TaxColumn, gross_yearly_income: u32) -> I
         }
     }
 
+    public_pension_progress_for_income(gross_yearly_income)
+}
+
+/// Estimates 2026 PGI from aggregate pensionable work income.
+pub fn public_pension_progress_for_income(gross_yearly_income: u32) -> IncomeBasisEstimate {
     let assessed_income = round_down_hundred(gross_yearly_income);
     let pensionable_income = if assessed_income < MINIMUM_PENSIONABLE_INCOME {
         0
@@ -92,6 +97,11 @@ pub fn estimated_sgi_progress(column: TaxColumn, gross_yearly_income: u32) -> In
         return IncomeBasisEstimate::NotBasedOnSelectedIncome;
     }
 
+    estimated_sgi_progress_for_income(gross_yearly_income)
+}
+
+/// Estimates 2026 SGI from an annualized recurring-work-income rate.
+pub fn estimated_sgi_progress_for_income(gross_yearly_income: u32) -> IncomeBasisEstimate {
     let estimated_sgi = if gross_yearly_income < MINIMUM_SGI_INCOME {
         0
     } else {

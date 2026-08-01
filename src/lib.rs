@@ -16,12 +16,24 @@
 //! rounding policy explicitly.
 
 mod income_bases;
+mod income_plan;
+mod withholding;
 
 pub use income_bases::{
-    estimated_sgi_progress, public_pension_progress, IncomeBasisEstimate, IncomeBasisProgress,
+    estimated_sgi_progress, estimated_sgi_progress_for_income, public_pension_progress,
+    public_pension_progress_for_income, IncomeBasisEstimate, IncomeBasisProgress,
     GENERAL_PENSION_FEE_INCOME_CEILING, MAXIMUM_PENSIONABLE_INCOME, MAXIMUM_SGI,
     MINIMUM_PENSIONABLE_INCOME, MINIMUM_SGI_INCOME,
 };
+pub use income_plan::{
+    AppliedWithholding, Date2026, EntryWithholding, IncomeEntry, IncomeKind, IncomePlan,
+    IncomePlanTotals, PayerRole, RegularPensionPremium, SalaryExchange, SalaryExchangeAllowance,
+    VacationCompensation, WithholdingSummary, DEFAULT_SALARY_EXCHANGE_UPLIFT_BASIS_POINTS,
+    EMPLOYER_PENSION_ALLOWANCE_MAXIMUM, EMPLOYER_PENSION_ALLOWANCE_RATE_BASIS_POINTS,
+    REGULAR_PENSION_LOWER_RATE_BASIS_POINTS, REGULAR_PENSION_MONTHLY_THRESHOLD,
+    REGULAR_PENSION_UPPER_RATE_BASIS_POINTS,
+};
+pub use withholding::one_time_withholding_rate;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
@@ -44,6 +56,44 @@ impl TaxColumn {
 pub enum TaxDeduction {
     Amount(u32),
     Percent(u32),
+}
+
+/// Age category used by the 2026 earned-income and basic-allowance rules.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TaxAgeGroup {
+    Under66AtYearStart,
+    AtLeast66AtYearStart,
+}
+
+impl TaxAgeGroup {
+    /// Tax-table column for salary and similar work income.
+    pub const fn salary_column(self) -> TaxColumn {
+        match self {
+            Self::Under66AtYearStart => TaxColumn::Column1,
+            Self::AtLeast66AtYearStart => TaxColumn::Column3,
+        }
+    }
+
+    /// Tax-table column for pension income.
+    pub const fn pension_column(self) -> TaxColumn {
+        match self {
+            Self::Under66AtYearStart => TaxColumn::Column6,
+            Self::AtLeast66AtYearStart => TaxColumn::Column2,
+        }
+    }
+}
+
+/// Annual income categories needed to calculate mixed salary and pension tax.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct AnnualIncomeProfile {
+    pub work_income: u32,
+    pub pension_income: u32,
+}
+
+impl AnnualIncomeProfile {
+    pub const fn total(self) -> u32 {
+        self.work_income.saturating_add(self.pension_income)
+    }
 }
 
 /// Lowest general monthly tax table published for income year 2026.
@@ -87,13 +137,98 @@ const SCALE: i128 = 100_000_000;
 /// whole hundred SEK as required by SKV 433. The selected column determines
 /// which allowance, fee, and tax-credit rules apply.
 pub fn annual_tax(table: u8, column: TaxColumn, gross_yearly_income: u32) -> Option<AnnualTax> {
+    let bases = match column {
+        TaxColumn::Column1 => AnnualTaxBases {
+            gross_income: gross_yearly_income,
+            pension_fee_income: gross_yearly_income,
+            work_income: gross_yearly_income,
+            enhanced_allowance: false,
+            work_credit: WorkCreditKind::Under66,
+            has_sickness_credit: false,
+        },
+        TaxColumn::Column2 => AnnualTaxBases {
+            gross_income: gross_yearly_income,
+            enhanced_allowance: true,
+            ..AnnualTaxBases::default()
+        },
+        TaxColumn::Column3 => AnnualTaxBases {
+            gross_income: gross_yearly_income,
+            pension_fee_income: gross_yearly_income,
+            work_income: gross_yearly_income,
+            enhanced_allowance: true,
+            work_credit: WorkCreditKind::Over66,
+            has_sickness_credit: false,
+        },
+        TaxColumn::Column4 => AnnualTaxBases {
+            gross_income: gross_yearly_income,
+            has_sickness_credit: true,
+            ..AnnualTaxBases::default()
+        },
+        TaxColumn::Column5 => AnnualTaxBases {
+            gross_income: gross_yearly_income,
+            pension_fee_income: gross_yearly_income,
+            ..AnnualTaxBases::default()
+        },
+        TaxColumn::Column6 => AnnualTaxBases {
+            gross_income: gross_yearly_income,
+            ..AnnualTaxBases::default()
+        },
+    };
+
+    annual_tax_from_bases(table, bases)
+}
+
+/// Calculates annual tax for a mixture of salary and pension income.
+pub fn annual_tax_for_income_profile(
+    table: u8,
+    age_group: TaxAgeGroup,
+    profile: AnnualIncomeProfile,
+) -> Option<AnnualTax> {
+    let work_credit = match age_group {
+        TaxAgeGroup::Under66AtYearStart => WorkCreditKind::Under66,
+        TaxAgeGroup::AtLeast66AtYearStart => WorkCreditKind::Over66,
+    };
+    annual_tax_from_bases(
+        table,
+        AnnualTaxBases {
+            gross_income: profile.total(),
+            pension_fee_income: profile.work_income,
+            work_income: profile.work_income,
+            enhanced_allowance: age_group == TaxAgeGroup::AtLeast66AtYearStart,
+            work_credit,
+            has_sickness_credit: false,
+        },
+    )
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct AnnualTaxBases {
+    gross_income: u32,
+    pension_fee_income: u32,
+    work_income: u32,
+    enhanced_allowance: bool,
+    work_credit: WorkCreditKind,
+    has_sickness_credit: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+enum WorkCreditKind {
+    #[default]
+    None,
+    Under66,
+    Over66,
+}
+
+fn annual_tax_from_bases(table: u8, bases: AnnualTaxBases) -> Option<AnnualTax> {
     if !(MIN_TAX_TABLE..=MAX_TAX_TABLE).contains(&table) {
         return None;
     }
 
-    let assessed_income = round_down_hundred(gross_yearly_income);
-    let enhanced_allowance = matches!(column, TaxColumn::Column2 | TaxColumn::Column3);
-    let basic_allowance = basic_allowance(assessed_income, enhanced_allowance);
+    let assessed_income = round_down_hundred(bases.gross_income);
+    let assessed_work_income = round_down_hundred(bases.work_income.min(assessed_income));
+    let assessed_pension_fee_income =
+        round_down_hundred(bases.pension_fee_income.min(assessed_income));
+    let basic_allowance = basic_allowance(assessed_income, bases.enhanced_allowance);
     let taxable_income = assessed_income.saturating_sub(basic_allowance);
 
     let state_income_tax = if taxable_income >= STATE_TAX_THRESHOLD + 200 {
@@ -105,15 +240,7 @@ pub fn annual_tax(table: u8, column: TaxColumn, gross_yearly_income: u32) -> Opt
     let municipal_income_tax = percentage_floor(taxable_income, municipal_rate, 10_000);
     let burial_and_religious_fee =
         percentage_floor(taxable_income, BURIAL_AND_RELIGIOUS_RATE, 10_000);
-    let has_pension_fee = matches!(
-        column,
-        TaxColumn::Column1 | TaxColumn::Column3 | TaxColumn::Column5
-    );
-    let pension_fee = if has_pension_fee {
-        pension_fee(assessed_income)
-    } else {
-        0
-    };
+    let pension_fee = pension_fee(assessed_pension_fee_income);
     let public_service_fee = (taxable_income / 100).min(PUBLIC_SERVICE_FEE_MAXIMUM);
 
     // Credits are consumed in SKV 433 order. Pension-fee credit may use state
@@ -123,17 +250,17 @@ pub fn annual_tax(table: u8, column: TaxColumn, gross_yearly_income: u32) -> Opt
     let mut municipal_tax_left =
         municipal_income_tax.saturating_sub(pension_credit_against_municipal);
 
-    let calculated_work_credit = match column {
-        TaxColumn::Column1 => {
-            work_income_credit_under_66(assessed_income, basic_allowance, municipal_rate)
+    let calculated_work_credit = match bases.work_credit {
+        WorkCreditKind::Under66 => {
+            work_income_credit_under_66(assessed_work_income, basic_allowance, municipal_rate)
         }
-        TaxColumn::Column3 => work_income_credit_over_66(assessed_income),
-        _ => 0,
+        WorkCreditKind::Over66 => work_income_credit_over_66(assessed_work_income),
+        WorkCreditKind::None => 0,
     };
     let work_income_credit = calculated_work_credit.min(municipal_tax_left);
     municipal_tax_left -= work_income_credit;
 
-    let calculated_sickness_credit = if column == TaxColumn::Column4 {
+    let calculated_sickness_credit = if bases.has_sickness_credit {
         sickness_compensation_credit(assessed_income, basic_allowance, municipal_rate)
     } else {
         0
@@ -515,6 +642,56 @@ mod tests {
                 public_service_fee: 1_184,
                 total: 359_353,
             })
+        );
+    }
+
+    #[test]
+    fn income_profiles_preserve_pure_salary_and_pension_calculations() {
+        let income = 420_000;
+
+        assert_eq!(
+            annual_tax_for_income_profile(
+                32,
+                TaxAgeGroup::Under66AtYearStart,
+                AnnualIncomeProfile {
+                    work_income: income,
+                    pension_income: 0,
+                },
+            ),
+            annual_tax(32, TaxColumn::Column1, income)
+        );
+        assert_eq!(
+            annual_tax_for_income_profile(
+                32,
+                TaxAgeGroup::Under66AtYearStart,
+                AnnualIncomeProfile {
+                    work_income: 0,
+                    pension_income: income,
+                },
+            ),
+            annual_tax(32, TaxColumn::Column6, income)
+        );
+        assert_eq!(
+            annual_tax_for_income_profile(
+                32,
+                TaxAgeGroup::AtLeast66AtYearStart,
+                AnnualIncomeProfile {
+                    work_income: income,
+                    pension_income: 0,
+                },
+            ),
+            annual_tax(32, TaxColumn::Column3, income)
+        );
+        assert_eq!(
+            annual_tax_for_income_profile(
+                32,
+                TaxAgeGroup::AtLeast66AtYearStart,
+                AnnualIncomeProfile {
+                    work_income: 0,
+                    pension_income: income,
+                },
+            ),
+            annual_tax(32, TaxColumn::Column2, income)
         );
     }
 

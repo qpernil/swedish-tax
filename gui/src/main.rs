@@ -1,7 +1,9 @@
 use eframe::egui;
 use swedish_tax::{
-    AnnualTax, IncomeBasisEstimate, MAX_TAX_TABLE, MIN_TAX_TABLE, TaxColumn, TaxDeduction,
-    annual_tax, estimated_sgi_progress, marginal_rate, monthly_deduction, public_pension_progress,
+    AnnualTax, AppliedWithholding, Date2026, EntryWithholding, IncomeBasisEstimate, IncomeEntry,
+    IncomeKind, IncomePlan, MAX_TAX_TABLE, MIN_TAX_TABLE, PayerRole, RegularPensionPremium,
+    SalaryExchange, TaxAgeGroup, TaxDeduction, VacationCompensation, annual_tax_for_income_profile,
+    estimated_sgi_progress_for_income, monthly_deduction, public_pension_progress_for_income,
 };
 
 const MAX_INCOME: u32 = 100_000_000;
@@ -15,40 +17,63 @@ type Summary<'a> = (
     Option<HoverHelp>,
 );
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum IncomePeriod {
-    Monthly,
-    Annual,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Calculation {
     monthly_income: u32,
     annual_income: u32,
+    ordinary_income: u32,
+    dividend_income: u32,
     table_deduction: TaxDeduction,
     annual_tax: AnnualTax,
+    dividend_tax: u32,
+    total_tax: u32,
+    withheld_tax: u32,
+    regular_pension_premiums: u32,
+    salary_exchange_sacrifice: u32,
+    salary_exchange_pension_contributions: u32,
+    employer_pension_contributions: u32,
     marginal_rate: f64,
     pension_progress: IncomeBasisEstimate,
     sgi_progress: IncomeBasisEstimate,
 }
 
 impl Calculation {
-    fn new(table: u8, column: TaxColumn, period: IncomePeriod, income: u32) -> Option<Self> {
-        let (monthly_income, annual_income) = match period {
-            IncomePeriod::Monthly => (income, income.saturating_mul(12)),
-            IncomePeriod::Annual => (income / 12, income),
+    fn new(table: u8, age_group: TaxAgeGroup, plan: &IncomePlan) -> Option<Self> {
+        if !plan.is_valid() {
+            return None;
+        }
+        let totals = plan.totals();
+        let annual_income = totals.gross_income();
+        let ordinary_income = totals.ordinary_income();
+        let monthly_income = totals.monthly_taxable_income();
+        let table_deduction = monthly_deduction(table, age_group.salary_column(), monthly_income)?;
+        let annual_tax = annual_tax_for_income_profile(table, age_group, totals.annual_profile())?;
+        let dividend_tax = percentage(totals.dividend_income, 20);
+        let total_tax = annual_tax.total.saturating_add(dividend_tax);
+        let withheld_tax = plan.estimated_withholding(table, age_group).total;
+        let upper_profile = swedish_tax::AnnualIncomeProfile {
+            work_income: totals.work_income.saturating_add(12_000),
+            pension_income: totals.pension_income,
         };
-        let table_deduction = monthly_deduction(table, column, monthly_income)?;
-        let annual_tax = annual_tax(table, column, annual_income)?;
-        let marginal_rate = marginal_rate(table, column, monthly_income)?;
-        let pension_progress = public_pension_progress(column, annual_income);
-        let sgi_progress = estimated_sgi_progress(column, annual_income);
+        let upper_tax = annual_tax_for_income_profile(table, age_group, upper_profile)?.total;
+        let marginal_rate = (f64::from(upper_tax) - f64::from(annual_tax.total)) * 100.0 / 12_000.0;
+        let pension_progress = public_pension_progress_for_income(totals.work_income);
+        let sgi_progress = estimated_sgi_progress_for_income(totals.sgi_annual_rate);
 
         Some(Self {
             monthly_income,
             annual_income,
+            ordinary_income,
+            dividend_income: totals.dividend_income,
             table_deduction,
             annual_tax,
+            dividend_tax,
+            total_tax,
+            withheld_tax,
+            regular_pension_premiums: totals.regular_pension_premiums,
+            salary_exchange_sacrifice: totals.salary_exchange_sacrifice,
+            salary_exchange_pension_contributions: totals.salary_exchange_pension_contributions,
+            employer_pension_contributions: totals.total_employer_pension_contributions(),
             marginal_rate,
             pension_progress,
             sgi_progress,
@@ -65,28 +90,47 @@ impl Calculation {
     }
 
     fn effective_rate(self) -> f64 {
-        if self.annual_income == 0 {
+        if self.ordinary_income == 0 {
             0.0
         } else {
-            f64::from(self.annual_tax.total) * 100.0 / f64::from(self.annual_income)
+            f64::from(self.annual_tax.total) * 100.0 / f64::from(self.ordinary_income)
         }
+    }
+
+    const fn annual_net(self) -> u32 {
+        self.annual_income.saturating_sub(self.total_tax)
+    }
+
+    const fn cash_after_withholding(self) -> u32 {
+        self.annual_income.saturating_sub(self.withheld_tax)
+    }
+
+    fn tax_balance(self) -> i64 {
+        i64::from(self.total_tax) - i64::from(self.withheld_tax)
     }
 }
 
 struct TaxApp {
     table: u8,
-    column: u8,
-    period: IncomePeriod,
-    income: u32,
+    age_group: TaxAgeGroup,
+    income_plan: IncomePlan,
+    income_editor_open: bool,
+}
+
+#[derive(Clone, Copy)]
+struct PensionEditorContext {
+    regular_pension_premiums: u32,
+    total_exchange_contributions: u32,
+    suggested_annual_salary_basis: u32,
 }
 
 impl Default for TaxApp {
     fn default() -> Self {
         Self {
             table: 32,
-            column: 1,
-            period: IncomePeriod::Monthly,
-            income: DEFAULT_MONTHLY_INCOME,
+            age_group: TaxAgeGroup::Under66AtYearStart,
+            income_plan: IncomePlan::with_monthly_salary(DEFAULT_MONTHLY_INCOME),
+            income_editor_open: false,
         }
     }
 }
@@ -95,18 +139,6 @@ impl TaxApp {
     fn new(context: &eframe::CreationContext<'_>) -> Self {
         configure_style(&context.egui_ctx);
         Self::default()
-    }
-
-    fn selected_column(&self) -> TaxColumn {
-        match self.column {
-            1 => TaxColumn::Column1,
-            2 => TaxColumn::Column2,
-            3 => TaxColumn::Column3,
-            4 => TaxColumn::Column4,
-            5 => TaxColumn::Column5,
-            6 => TaxColumn::Column6,
-            _ => unreachable!("the column selector only exposes columns 1 through 6"),
-        }
     }
 
     fn controls(&mut self, ui: &mut egui::Ui) {
@@ -123,12 +155,6 @@ impl TaxApp {
                 );
                 ui.add_space(10.0);
                 ui.horizontal_wrapped(|ui| {
-                    control_group(ui, "Income basis", |ui| {
-                        ui.selectable_value(&mut self.period, IncomePeriod::Monthly, "Monthly");
-                        ui.selectable_value(&mut self.period, IncomePeriod::Annual, "Annual");
-                    });
-
-                    ui.add_space(12.0);
                     ui.vertical(|ui| {
                         ui.label(secondary_label("Tax table"));
                         let response = egui::ComboBox::from_id_salt("tax-table")
@@ -145,37 +171,43 @@ impl TaxApp {
 
                     ui.add_space(12.0);
                     ui.vertical(|ui| {
-                        ui.label(secondary_label("Column"));
-                        let response = egui::ComboBox::from_id_salt("tax-column")
-                            .selected_text(self.column.to_string())
-                            .width(90.0)
-                            .show_ui(ui, |ui| {
-                                for column in 1..=6 {
-                                    ui.selectable_value(
-                                        &mut self.column,
-                                        column,
-                                        format!("Column {column}"),
-                                    );
-                                }
+                        ui.label(secondary_label("Age at start of 2026"));
+                        egui::ComboBox::from_id_salt("tax-age-group")
+                            .selected_text(match self.age_group {
+                                TaxAgeGroup::Under66AtYearStart => "Under 66",
+                                TaxAgeGroup::AtLeast66AtYearStart => "66 or older",
                             })
-                            .response;
-                        response.on_hover_ui(column_selector_help);
+                            .width(120.0)
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(
+                                    &mut self.age_group,
+                                    TaxAgeGroup::Under66AtYearStart,
+                                    "Under 66",
+                                );
+                                ui.selectable_value(
+                                    &mut self.age_group,
+                                    TaxAgeGroup::AtLeast66AtYearStart,
+                                    "66 or older",
+                                );
+                            });
                     });
 
                     ui.add_space(12.0);
                     ui.vertical(|ui| {
-                        let label = match self.period {
-                            IncomePeriod::Monthly => "Monthly income",
-                            IncomePeriod::Annual => "Annual income",
-                        };
-                        ui.label(secondary_label(label));
-                        ui.add_sized(
-                            [180.0, 28.0],
-                            egui::DragValue::new(&mut self.income)
-                                .range(0..=MAX_INCOME)
-                                .speed(1_000.0)
-                                .suffix(" SEK"),
-                        );
+                        ui.label(secondary_label("Average monthly taxable income"));
+                        let monthly_income = self.income_plan.totals().monthly_taxable_income();
+                        if ui
+                            .add_sized(
+                                [210.0, 28.0],
+                                egui::Button::new(format!(
+                                    "{} / month  ·  Edit…",
+                                    format_sek(monthly_income)
+                                )),
+                            )
+                            .clicked()
+                        {
+                            self.income_editor_open = true;
+                        }
                     });
                 });
             });
@@ -192,8 +224,13 @@ impl TaxApp {
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(
-                    egui::RichText::new(format!("Table {} / Column {}", self.table, self.column))
-                        .color(blue_color()),
+                    egui::RichText::new(format!(
+                        "Table {} / salary column {} / pension column {}",
+                        self.table,
+                        self.age_group.salary_column() as u8,
+                        self.age_group.pension_column() as u8,
+                    ))
+                    .color(blue_color()),
                 );
             });
         });
@@ -201,23 +238,23 @@ impl TaxApp {
 
         let summaries = [
             (
-                "Official table",
+                "Monthly table reference",
                 table_deduction_text(calculation.table_deduction),
                 None,
                 blue_color(),
                 None,
             ),
             (
-                "Annual formula",
-                format_sek(calculation.annual_tax.total),
+                "Final tax estimate",
+                format_sek(calculation.total_tax),
                 Some(format!("Marginal tax: {:.1}%", calculation.marginal_rate)),
                 green_color(),
                 Some(marginal_rate_help as HoverHelp),
             ),
             (
-                "Monthly net",
-                format_sek(calculation.formula_monthly_net()),
-                None,
+                "Annual net",
+                format_sek(calculation.annual_net()),
+                Some(tax_balance_summary(calculation.tax_balance())),
                 primary_text(),
                 None,
             ),
@@ -243,6 +280,149 @@ impl TaxApp {
         );
         ui.add_space(8.0);
         annual_breakdown(ui, calculation.annual_tax);
+        if calculation.dividend_income > 0 {
+            ui.add_space(8.0);
+            egui::Grid::new("dividend-tax-breakdown-grid")
+                .num_columns(2)
+                .striped(true)
+                .min_col_width(260.0)
+                .show(ui, |ui| {
+                    value_row(
+                        ui,
+                        "Own-AB dividend",
+                        format_sek(calculation.dividend_income),
+                    );
+                    value_row(
+                        ui,
+                        "Dividend tax at 20%",
+                        format_sek(calculation.dividend_tax),
+                    );
+                    value_row(ui, "Total final tax", format_sek(calculation.total_tax));
+                });
+        }
+    }
+
+    fn income_editor(&mut self, context: &egui::Context) {
+        if !self.income_editor_open {
+            return;
+        }
+
+        let mut open = self.income_editor_open;
+        let mut close_requested = false;
+        egui::Window::new("Income calculator")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(true)
+            .default_width(920.0)
+            .min_width(760.0)
+            .show(context, |ui| {
+                ui.label(
+                    egui::RichText::new(
+                        "Edit an existing row directly. Add another income only for a separate source or payment.",
+                    )
+                    .color(secondary_text()),
+                );
+                ui.add_space(10.0);
+                adjustment_editor(ui, &mut self.income_plan);
+                ui.add_space(12.0);
+
+                let mut remove_id = None;
+                let adjustment_percent = self.income_plan.adjustment_percent;
+                let pension_totals = self.income_plan.totals();
+                let pension_context = PensionEditorContext {
+                    regular_pension_premiums: pension_totals.regular_pension_premiums,
+                    total_exchange_contributions: pension_totals
+                        .salary_exchange_pension_contributions,
+                    suggested_annual_salary_basis: self
+                        .income_plan
+                        .suggested_annual_pension_salary_basis(),
+                };
+                let entry_withholding = self
+                    .income_plan
+                    .estimated_withholding(self.table, self.age_group)
+                    .entries;
+                egui::ScrollArea::vertical()
+                    .max_height(500.0)
+                    .show(ui, |ui| {
+                        for entry in &mut self.income_plan.entries {
+                            let withholding = entry_withholding
+                                .iter()
+                                .find(|estimate| estimate.entry_id == entry.id)
+                                .copied();
+                            ui.push_id(("income-entry", entry.id), |ui| {
+                                income_entry_editor(
+                                    ui,
+                                    entry,
+                                    adjustment_percent,
+                                    withholding,
+                                    pension_context,
+                                );
+                                if ui
+                                    .small_button("Remove this income")
+                                    .on_hover_text("Remove this row")
+                                    .clicked()
+                                {
+                                    remove_id = Some(entry.id);
+                                }
+                            });
+                            ui.add_space(8.0);
+                        }
+                    });
+                if let Some(id) = remove_id {
+                    self.income_plan.remove_entry(id);
+                }
+
+                ui.horizontal(|ui| {
+                    if ui.button("+ Add another income").clicked() {
+                        self.income_plan.add_entry(IncomeKind::AnnualSalary);
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button("Done").clicked() {
+                            close_requested = true;
+                        }
+                    });
+                });
+
+                ui.add_space(12.0);
+                ui.separator();
+                ui.add_space(8.0);
+                let totals = self.income_plan.totals();
+                let withholding = self
+                    .income_plan
+                    .estimated_withholding(self.table, self.age_group);
+                egui::Grid::new("income-calculator-totals")
+                    .num_columns(2)
+                    .striped(true)
+                    .show(ui, |ui| {
+                        value_row(ui, "Salary and compensation", format_sek(totals.work_income));
+                        value_row(ui, "Tjänstepension", format_sek(totals.pension_income));
+                        value_row(ui, "Own-AB dividend", format_sek(totals.dividend_income));
+                        value_row(
+                            ui,
+                            "Regular employer pension premiums",
+                            format_sek(totals.regular_pension_premiums),
+                        );
+                        value_row(
+                            ui,
+                            "Salary exchanged",
+                            format_sek(totals.salary_exchange_sacrifice),
+                        );
+                        value_row(
+                            ui,
+                            "Salary-exchange pension deposits",
+                            format_sek(totals.salary_exchange_pension_contributions),
+                        );
+                        value_row(
+                            ui,
+                            "Total employer pension contributions",
+                            format_sek(totals.total_employer_pension_contributions()),
+                        );
+                        value_row(ui, "Total annual income", format_sek(totals.gross_income()));
+                        value_row(ui, "Estimated tax withheld", format_sek(withholding.total));
+                    });
+            });
+
+        self.income_editor_open = open && !close_requested;
     }
 }
 
@@ -265,30 +445,6 @@ fn table_selector_help(ui: &mut egui::Ui) {
     );
 }
 
-fn column_selector_help(ui: &mut egui::Ui) {
-    const COLUMNS: [&str; 6] = [
-        "1. Salary, under 66. Work income eligible for the earned-income tax credit.",
-        "2. Pension, 66 or older. No general pension contribution or earned-income tax credit.",
-        "3. Salary, 66 or older. Work income eligible for the enhanced earned-income tax credit.",
-        "4. Sickness or activity compensation, under 66. Eligible for its specific tax reduction.",
-        "5. Other pensionable compensation. For example unemployment benefits; no earned-income tax credit.",
-        "6. Pension, under 66. No general pension contribution or earned-income tax credit.",
-    ];
-
-    ui.set_max_width(420.0);
-    ui.label(egui::RichText::new("2026 table columns").strong());
-    ui.add_space(4.0);
-    for description in COLUMNS {
-        ui.label(description);
-    }
-    ui.add_space(4.0);
-    ui.label(
-        egui::RichText::new("Age is determined at the beginning of the income year.")
-            .small()
-            .color(secondary_text()),
-    );
-}
-
 fn marginal_rate_help(ui: &mut egui::Ui) {
     ui.set_max_width(380.0);
     ui.label(egui::RichText::new("How marginal tax is calculated").strong());
@@ -301,6 +457,693 @@ fn marginal_rate_help(ui: &mut egui::Ui) {
     );
     ui.add_space(4.0);
     ui.label("The additional annual tax is divided by 12,000 and shown as a percentage.");
+}
+
+fn adjustment_editor(ui: &mut egui::Ui, plan: &mut IncomePlan) {
+    egui::Frame::new()
+        .fill(egui::Color32::from_rgb(246, 249, 248))
+        .stroke(egui::Stroke::new(1.0, border_color()))
+        .inner_margin(12.0)
+        .show(ui, |ui| {
+            ui.vertical(|ui| {
+                let mut enabled = plan.adjustment_percent.is_some();
+                if ui
+                    .checkbox(&mut enabled, "Existing percentage jämkning")
+                    .changed()
+                {
+                    plan.adjustment_percent = enabled.then_some(30);
+                }
+                if let Some(percent) = &mut plan.adjustment_percent {
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        ui.label(secondary_label("Decision withholding"));
+                        percentage_editor(ui, "adjustment-percentage", percent);
+                    });
+                    ui.add_space(2.0);
+                    ui.label(
+                        egui::RichText::new(
+                            "Choose ‘shown to this payer’ on every affected income row.",
+                        )
+                        .small()
+                        .color(secondary_text()),
+                    );
+                }
+            });
+        });
+}
+
+fn income_entry_editor(
+    ui: &mut egui::Ui,
+    entry: &mut IncomeEntry,
+    adjustment: Option<u32>,
+    withholding: Option<EntryWithholding>,
+    pension_context: PensionEditorContext,
+) {
+    egui::Frame::new()
+        .fill(surface_color())
+        .stroke(egui::Stroke::new(1.0, border_color()))
+        .inner_margin(12.0)
+        .show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            let previous_kind = entry.kind;
+            ui.horizontal_wrapped(|ui| {
+                ui.vertical(|ui| {
+                    ui.label(secondary_label("Description"));
+                    ui.add_sized(
+                        [190.0, 26.0],
+                        egui::TextEdit::singleline(&mut entry.description)
+                            .hint_text("Employer or payment"),
+                    );
+                });
+                ui.vertical(|ui| {
+                    ui.label(secondary_label("Income type"));
+                    egui::ComboBox::from_id_salt(("income-kind", entry.id))
+                        .selected_text(entry.kind.label())
+                        .width(270.0)
+                        .show_ui(ui, |ui| {
+                            for kind in IncomeKind::ALL {
+                                ui.selectable_value(&mut entry.kind, kind, kind.label());
+                            }
+                        });
+                });
+                ui.vertical(|ui| {
+                    ui.label(secondary_label(if entry.kind.is_monthly() {
+                        "Amount per month"
+                    } else {
+                        "Annual / one-time amount"
+                    }));
+                    ui.add(
+                        egui::DragValue::new(&mut entry.amount)
+                            .range(0..=MAX_INCOME)
+                            .suffix(" SEK")
+                            .speed(1_000.0),
+                    );
+                });
+            });
+
+            if entry.kind != previous_kind {
+                if matches!(
+                    entry.kind,
+                    IncomeKind::AnnualSalary | IncomeKind::MonthlySalary
+                ) && entry.regular_pension_premium.is_none()
+                {
+                    entry.regular_pension_premium = Some(RegularPensionPremium::default());
+                }
+                if entry.kind != IncomeKind::OneTimeSalary {
+                    entry.salary_exchange = None;
+                }
+                if entry.kind != IncomeKind::MonthlySalary {
+                    entry.vacation_compensation = None;
+                }
+            }
+
+            if entry.kind.is_monthly() {
+                ui.add_space(8.0);
+                ui.label(secondary_label("Payment period"));
+                let mut period_changed = false;
+                ui.horizontal_wrapped(|ui| {
+                    period_changed |= date_editor(ui, "From", entry.id, &mut entry.start);
+                    ui.label(egui::RichText::new("to").color(secondary_text()));
+                    period_changed |=
+                        date_editor(ui, "Through", entry.id + 1_000_000, &mut entry.end);
+                    if ui.small_button("Full year").clicked() {
+                        entry.start = Date2026::new(1, 1);
+                        entry.end = Date2026::new(12, 31);
+                        period_changed = true;
+                    }
+                    if !entry.is_valid() {
+                        ui.colored_label(
+                            egui::Color32::DARK_RED,
+                            "End date must follow start date",
+                        );
+                    }
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "Annual amount: {}",
+                            format_sek(entry.annual_amount())
+                        ))
+                        .small()
+                        .strong(),
+                    );
+                });
+                if entry.kind == IncomeKind::MonthlySalary {
+                    ui.add_space(8.0);
+                    vacation_compensation_editor(ui, entry, period_changed);
+                }
+            }
+
+            if matches!(
+                entry.kind,
+                IncomeKind::AnnualSalary | IncomeKind::MonthlySalary
+            ) {
+                ui.add_space(8.0);
+                regular_pension_premium_editor(ui, entry);
+            }
+            if entry.kind == IncomeKind::OneTimeSalary {
+                ui.add_space(8.0);
+                salary_exchange_editor(ui, entry, pension_context);
+            }
+
+            ui.add_space(8.0);
+            ui.horizontal_wrapped(|ui| {
+                if entry.kind.is_dividend() {
+                    ui.label(eligibility_badge(
+                        "20% final tax within gränsbelopp · 0% withheld · no PGI · no SGI",
+                    ));
+                } else {
+                    ui.vertical(|ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(secondary_label("Payer"));
+                            egui::ComboBox::from_id_salt(("payer-role", entry.id))
+                                .selected_text(match entry.payer_role {
+                                    PayerRole::Main => "Main payer",
+                                    PayerRole::Secondary => "Secondary payer",
+                                })
+                                .width(150.0)
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(
+                                        &mut entry.payer_role,
+                                        PayerRole::Main,
+                                        "Main payer — table",
+                                    );
+                                    ui.selectable_value(
+                                        &mut entry.payer_role,
+                                        PayerRole::Secondary,
+                                        "Secondary payer — 30%",
+                                    );
+                                });
+                            if adjustment.is_some() {
+                                ui.checkbox(
+                                    &mut entry.adjustment_applies,
+                                    "Jämkning shown to this payer",
+                                );
+                            } else {
+                                entry.adjustment_applies = false;
+                            }
+                        });
+
+                        ui.horizontal_wrapped(|ui| {
+                            let mut custom = entry.custom_withholding_percent.is_some();
+                            if ui.checkbox(&mut custom, "Custom withholding").changed() {
+                                entry.custom_withholding_percent = custom.then_some(30);
+                            }
+                            if let Some(percent) = &mut entry.custom_withholding_percent {
+                                percentage_editor(ui, "custom-withholding", percent);
+                            }
+                            ui.label(eligibility_badge(income_eligibility(entry.kind)));
+                        });
+                    });
+                }
+            });
+            if let Some(withholding) = withholding {
+                ui.add_space(6.0);
+                ui.label(
+                    egui::RichText::new(format!(
+                        "Estimated withheld: {} · {}",
+                        format_sek(withholding.withheld),
+                        withholding_rule_text(withholding.rule),
+                    ))
+                    .small()
+                    .color(secondary_text()),
+                );
+            }
+        });
+}
+
+fn regular_pension_premium_editor(ui: &mut egui::Ui, entry: &mut IncomeEntry) {
+    egui::Frame::new()
+        .fill(egui::Color32::from_rgb(242, 247, 252))
+        .stroke(egui::Stroke::new(
+            1.0,
+            egui::Color32::from_rgb(190, 210, 225),
+        ))
+        .corner_radius(5.0)
+        .inner_margin(10.0)
+        .show(ui, |ui| {
+            let mut enabled = entry.regular_pension_premium.is_some();
+            if ui
+                .checkbox(&mut enabled, "Calculate employer tjänstepension")
+                .changed()
+            {
+                entry.regular_pension_premium = enabled.then_some(RegularPensionPremium::default());
+            }
+            let Some(mut premium) = entry.regular_pension_premium else {
+                ui.label(
+                    egui::RichText::new("No employer pension premium included for this salary.")
+                        .small()
+                        .color(secondary_text()),
+                );
+                return;
+            };
+
+            let monthly_salary = if entry.kind == IncomeKind::AnnualSalary {
+                entry.amount / 12
+            } else {
+                entry.amount
+            };
+            let benchmark = RegularPensionPremium::benchmark_monthly(monthly_salary);
+            ui.add_space(5.0);
+            ui.label(
+                egui::RichText::new(
+                    "2026 individual-pension benchmark: 4.5% through 52 125 SEK/month, then 30%.",
+                )
+                .small()
+                .color(secondary_text()),
+            );
+            ui.horizontal_wrapped(|ui| {
+                ui.label(format!("Benchmark: {}", format_sek(benchmark)));
+                let mut use_override = premium.monthly_override.is_some();
+                if ui
+                    .checkbox(&mut use_override, "Use actual monthly premium")
+                    .changed()
+                {
+                    premium.monthly_override = use_override.then_some(benchmark);
+                }
+                if let Some(actual) = &mut premium.monthly_override {
+                    ui.add_sized(
+                        [145.0, 28.0],
+                        egui::DragValue::new(actual)
+                            .range(0..=MAX_INCOME)
+                            .suffix(" SEK")
+                            .speed(100.0),
+                    );
+                }
+            });
+            entry.regular_pension_premium = Some(premium);
+            ui.label(
+                egui::RichText::new(format!(
+                    "Estimated premium for this salary period: {}",
+                    format_sek(entry.regular_pension_premium_amount()),
+                ))
+                .strong()
+                .color(blue_color()),
+            );
+        });
+}
+
+fn salary_exchange_editor(
+    ui: &mut egui::Ui,
+    entry: &mut IncomeEntry,
+    context: PensionEditorContext,
+) {
+    let contribution_before_edit = entry.salary_exchange_pension_contribution();
+    let other_exchange_contributions = context
+        .total_exchange_contributions
+        .saturating_sub(contribution_before_edit);
+    let used_before_this_payment = context
+        .regular_pension_premiums
+        .saturating_add(other_exchange_contributions);
+
+    egui::Frame::new()
+        .fill(egui::Color32::from_rgb(244, 250, 246))
+        .stroke(egui::Stroke::new(
+            1.0,
+            egui::Color32::from_rgb(184, 214, 197),
+        ))
+        .corner_radius(5.0)
+        .inner_margin(10.0)
+        .show(ui, |ui| {
+            let mut enabled = entry.salary_exchange.is_some();
+            if ui
+                .checkbox(
+                    &mut enabled,
+                    "Exchange part of this payment for tjänstepension",
+                )
+                .changed()
+            {
+                if enabled {
+                    let mut exchange = SalaryExchange::new(context.suggested_annual_salary_basis);
+                    let available = exchange
+                        .allowance_ceiling()
+                        .saturating_sub(used_before_this_payment);
+                    exchange.sacrificed_salary =
+                        exchange.maximum_sacrifice(available).min(entry.amount);
+                    entry.salary_exchange = Some(exchange);
+                } else {
+                    entry.salary_exchange = None;
+                }
+            }
+            let Some(exchange) = &mut entry.salary_exchange else {
+                ui.label(
+                    egui::RichText::new("The complete one-time payment remains taxable salary.")
+                        .small()
+                        .color(secondary_text()),
+                );
+                return;
+            };
+
+            ui.add_space(6.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.vertical(|ui| {
+                    ui.label(secondary_label("Annual pensionable salary basis"));
+                    ui.add_sized(
+                        [170.0, 28.0],
+                        egui::DragValue::new(&mut exchange.annual_salary_basis)
+                            .range(0..=MAX_INCOME)
+                            .suffix(" SEK")
+                            .speed(1_000.0),
+                    );
+                });
+                ui.vertical(|ui| {
+                    ui.label(secondary_label("Employer uplift"));
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut exchange.employer_adds_uplift, "Added");
+                        if exchange.employer_adds_uplift {
+                            basis_points_percentage_editor(
+                                ui,
+                                "salary-exchange-uplift",
+                                &mut exchange.uplift_basis_points,
+                            );
+                        }
+                    });
+                });
+            });
+
+            let ceiling = exchange.allowance_ceiling();
+            let available_contribution = ceiling.saturating_sub(used_before_this_payment);
+            let maximum_sacrifice = exchange
+                .maximum_sacrifice(available_contribution)
+                .min(entry.amount);
+            exchange.sacrificed_salary = exchange.sacrificed_salary.min(maximum_sacrifice);
+
+            ui.add_space(6.0);
+            egui::Grid::new(("salary-exchange-allowance", entry.id))
+                .num_columns(2)
+                .striped(true)
+                .min_col_width(220.0)
+                .show(ui, |ui| {
+                    value_row(
+                        ui,
+                        "Indicative employer deduction ceiling",
+                        format_sek(ceiling),
+                    );
+                    value_row(
+                        ui,
+                        "Regular pension premiums",
+                        format_sek(context.regular_pension_premiums),
+                    );
+                    if other_exchange_contributions > 0 {
+                        value_row(
+                            ui,
+                            "Other salary-exchange deposits",
+                            format_sek(other_exchange_contributions),
+                        );
+                    }
+                    value_row(
+                        ui,
+                        "Available pension contribution",
+                        format_sek(available_contribution),
+                    );
+                });
+            ui.label(
+                egui::RichText::new(
+                    "Main-rule estimate: 35% of the selected annual pensionable salary, capped at 592 000 SEK for 2026.",
+                )
+                .small()
+                .color(secondary_text()),
+            );
+
+            ui.add_space(6.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.vertical(|ui| {
+                    ui.label(secondary_label("Salary to exchange"));
+                    ui.add_sized(
+                        [170.0, 28.0],
+                        egui::DragValue::new(&mut exchange.sacrificed_salary)
+                            .range(0..=maximum_sacrifice)
+                            .suffix(" SEK")
+                            .speed(1_000.0),
+                    );
+                });
+                if ui.button("Use maximum").clicked() {
+                    exchange.sacrificed_salary = maximum_sacrifice;
+                }
+                ui.label(
+                    egui::RichText::new(format!("Maximum: {}", format_sek(maximum_sacrifice)))
+                        .small()
+                        .color(secondary_text()),
+                );
+            });
+
+            let pension_contribution = exchange.pension_contribution();
+            let taxable_payment = entry.amount.saturating_sub(exchange.sacrificed_salary);
+            ui.horizontal_wrapped(|ui| {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "Pension deposit: {}",
+                        format_sek(pension_contribution)
+                    ))
+                    .strong()
+                    .color(green_color()),
+                );
+                ui.label("·");
+                ui.label(
+                    egui::RichText::new(format!(
+                        "Taxable cash payment: {}",
+                        format_sek(taxable_payment)
+                    ))
+                    .strong()
+                    .color(primary_text()),
+                );
+            });
+        });
+}
+
+fn vacation_compensation_editor(ui: &mut egui::Ui, entry: &mut IncomeEntry, period_changed: bool) {
+    if period_changed && let Some(vacation) = &mut entry.vacation_compensation {
+        vacation.payout_days = VacationCompensation::suggested_days(
+            vacation.annual_entitlement_days,
+            entry.start,
+            entry.end,
+        );
+    }
+
+    egui::Frame::new()
+        .fill(egui::Color32::from_rgb(246, 249, 248))
+        .stroke(egui::Stroke::new(1.0, border_color()))
+        .corner_radius(5.0)
+        .inner_margin(10.0)
+        .show(ui, |ui| {
+            let mut annual_days = entry
+                .vacation_compensation
+                .map(|vacation| vacation.annual_entitlement_days)
+                .unwrap_or(0);
+            ui.horizontal_wrapped(|ui| {
+                ui.vertical(|ui| {
+                    ui.label(secondary_label(
+                        "Vacation days per full year (0 means none)",
+                    ));
+                    let response = ui.add_sized(
+                        [95.0, 28.0],
+                        egui::DragValue::new(&mut annual_days)
+                            .range(0..=100)
+                            .suffix(" days"),
+                    );
+                    if response.changed() {
+                        entry.vacation_compensation = (annual_days > 0).then(|| {
+                            VacationCompensation::suggested(
+                                annual_days,
+                                entry.start,
+                                entry.end,
+                            )
+                        });
+                    }
+                });
+
+                let Some(vacation) = &mut entry.vacation_compensation else {
+                    return;
+                };
+                ui.add_space(10.0);
+                ui.vertical(|ui| {
+                    ui.label(secondary_label("Days paid out"));
+                    ui.add_sized(
+                        [95.0, 28.0],
+                        egui::DragValue::new(&mut vacation.payout_days)
+                            .range(0..=365)
+                            .suffix(" days"),
+                    );
+                });
+                if ui.small_button("Use suggested days").clicked() {
+                    vacation.payout_days = VacationCompensation::suggested_days(
+                        vacation.annual_entitlement_days,
+                        entry.start,
+                        entry.end,
+                    );
+                }
+            });
+
+            let Some(vacation) = entry.vacation_compensation else {
+                ui.label(
+                    egui::RichText::new(
+                        "Enter the annual entitlement to estimate accrued vacation compensation.",
+                    )
+                    .small()
+                    .color(secondary_text()),
+                );
+                return;
+            };
+            ui.add_space(6.0);
+            let per_day = f64::from(entry.amount) / 21.0 + f64::from(entry.amount) * 0.0043;
+            ui.label(
+                egui::RichText::new(format!(
+                    "Same-year statutory estimate: monthly salary / 21 + 0.43% of monthly salary = {per_day:.2} SEK/day"
+                ))
+                .small()
+                .color(secondary_text()),
+            );
+            ui.label(
+                egui::RichText::new(format!(
+                    "Vacation compensation: {}",
+                    format_sek(vacation.amount(entry.amount)),
+                ))
+                .strong()
+                .color(primary_text()),
+            );
+        });
+}
+
+fn date_editor(ui: &mut egui::Ui, label: &str, id: u64, date: &mut Date2026) -> bool {
+    let previous = *date;
+    egui::Frame::new()
+        .fill(egui::Color32::from_rgb(249, 251, 250))
+        .stroke(egui::Stroke::new(1.0, border_color()))
+        .corner_radius(5.0)
+        .inner_margin(8.0)
+        .show(ui, |ui| {
+            ui.vertical(|ui| {
+                ui.label(secondary_label(label));
+                ui.horizontal(|ui| {
+                    egui::ComboBox::from_id_salt(("date-month", id))
+                        .selected_text(month_name(date.month))
+                        .width(78.0)
+                        .show_ui(ui, |ui| {
+                            for month in 1..=12 {
+                                ui.selectable_value(&mut date.month, month, month_name(month));
+                            }
+                        });
+                    let maximum = Date2026::days_in_month(date.month);
+                    date.day = date.day.clamp(1, maximum);
+                    ui.add_sized(
+                        [54.0, 28.0],
+                        egui::DragValue::new(&mut date.day)
+                            .range(1..=maximum)
+                            .prefix("Day ")
+                            .speed(1.0),
+                    );
+                    ui.label(egui::RichText::new("2026").strong().color(secondary_text()));
+                });
+            });
+        });
+    *date != previous
+}
+
+fn month_name(month: u8) -> &'static str {
+    const MONTHS: [&str; 12] = [
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
+    ];
+    MONTHS[usize::from(month.clamp(1, 12) - 1)]
+}
+
+fn percentage_editor(ui: &mut egui::Ui, id: &'static str, percent: &mut u32) {
+    ui.push_id(id, |ui| {
+        egui::Frame::new()
+            .fill(egui::Color32::WHITE)
+            .stroke(egui::Stroke::new(1.0, border_color()))
+            .corner_radius(5.0)
+            .inner_margin(3.0)
+            .show(ui, |ui| {
+                ui.horizontal_centered(|ui| {
+                    if ui
+                        .add_sized([28.0, 26.0], egui::Button::new("−"))
+                        .on_hover_text("Decrease by 1%")
+                        .clicked()
+                    {
+                        *percent = percent.saturating_sub(1);
+                    }
+                    ui.add_sized(
+                        [72.0, 26.0],
+                        egui::DragValue::new(percent)
+                            .range(0..=100)
+                            .suffix(" %")
+                            .speed(1.0),
+                    );
+                    if ui
+                        .add_sized([28.0, 26.0], egui::Button::new("+"))
+                        .on_hover_text("Increase by 1%")
+                        .clicked()
+                    {
+                        *percent = percent.saturating_add(1).min(100);
+                    }
+                });
+            });
+    });
+}
+
+fn basis_points_percentage_editor(ui: &mut egui::Ui, id: &'static str, basis_points: &mut u32) {
+    ui.push_id(id, |ui| {
+        let mut percent = f64::from(*basis_points) / 100.0;
+        let response = ui.add_sized(
+            [90.0, 26.0],
+            egui::DragValue::new(&mut percent)
+                .range(0.0..=100.0)
+                .suffix(" %")
+                .speed(0.05)
+                .max_decimals(2),
+        );
+        if response.changed() {
+            *basis_points = (percent * 100.0).round() as u32;
+        }
+    });
+}
+
+fn income_eligibility(kind: IncomeKind) -> &'static str {
+    match kind {
+        IncomeKind::AnnualSalary | IncomeKind::MonthlySalary => {
+            "PGI eligible · SGI estimate eligible"
+        }
+        IncomeKind::OneTimeSalary => "PGI eligible · does not establish ongoing SGI",
+        IncomeKind::MonthlyOccupationalPension | IncomeKind::AnnualOccupationalPension => {
+            "PGI — · SGI —"
+        }
+        IncomeKind::OwnCompanyDividend => "PGI — · SGI —",
+    }
+}
+
+fn eligibility_badge(text: &str) -> egui::RichText {
+    egui::RichText::new(text)
+        .small()
+        .strong()
+        .color(green_color())
+}
+
+fn withholding_rule_text(rule: AppliedWithholding) -> String {
+    match rule {
+        AppliedWithholding::Table(column) => format!("table column {}", column as u8),
+        AppliedWithholding::TableAndOneTime(column, percent) => format!(
+            "table column {} plus one-time-payment table at {percent}%",
+            column as u8,
+        ),
+        AppliedWithholding::OneTimeTable(percent) => {
+            format!("one-time-payment table at {percent}%")
+        }
+        AppliedWithholding::Secondary30 => "secondary payer at 30%".to_owned(),
+        AppliedWithholding::AdjustmentPercent(percent) => {
+            format!("percentage jämkning at {percent}%")
+        }
+        AppliedWithholding::CustomPercent(percent) => format!("custom {percent}%"),
+        AppliedWithholding::None => "no preliminary withholding".to_owned(),
+    }
 }
 
 impl eframe::App for TaxApp {
@@ -338,13 +1181,16 @@ impl eframe::App for TaxApp {
                     ui.add_space(18.0);
 
                     self.controls(ui);
-                    if let Some(calculation) = Calculation::new(
-                        self.table,
-                        self.selected_column(),
-                        self.period,
-                        self.income,
-                    ) {
+                    if let Some(calculation) =
+                        Calculation::new(self.table, self.age_group, &self.income_plan)
+                    {
                         self.results(ui, calculation);
+                    } else {
+                        ui.add_space(20.0);
+                        ui.colored_label(
+                            egui::Color32::DARK_RED,
+                            "Complete or correct the dated income rows to show results.",
+                        );
                     }
 
                     ui.add_space(24.0);
@@ -359,6 +1205,8 @@ impl eframe::App for TaxApp {
                     );
                 });
             });
+
+        self.income_editor(ui.ctx());
     }
 }
 
@@ -376,13 +1224,6 @@ fn configure_style(context: &egui::Context) {
     context.style_mut_of(egui::Theme::Light, |style| {
         style.spacing.item_spacing = egui::vec2(10.0, 8.0);
         style.spacing.button_padding = egui::vec2(12.0, 7.0);
-    });
-}
-
-fn control_group(ui: &mut egui::Ui, label: &str, contents: impl FnOnce(&mut egui::Ui)) {
-    ui.vertical(|ui| {
-        ui.label(secondary_label(label));
-        ui.horizontal(contents);
     });
 }
 
@@ -449,7 +1290,7 @@ fn summary_tile(
 
 fn comparison(ui: &mut egui::Ui, calculation: Calculation) {
     ui.label(
-        egui::RichText::new("Table and formula")
+        egui::RichText::new("Monthly view and annual reconciliation")
             .strong()
             .size(17.0)
             .color(primary_text()),
@@ -462,17 +1303,55 @@ fn comparison(ui: &mut egui::Ui, calculation: Calculation) {
         .show(ui, |ui| {
             value_row(
                 ui,
-                "Monthly gross income",
+                "Average monthly taxable income",
                 format_sek(calculation.monthly_income),
             );
             value_row(
                 ui,
-                "Annual gross income",
-                format_sek(calculation.annual_income),
+                "Annual salary and pension",
+                format_sek(calculation.ordinary_income),
             );
+            if calculation.dividend_income > 0 {
+                value_row(
+                    ui,
+                    "Own-AB dividend",
+                    format_sek(calculation.dividend_income),
+                );
+            }
             value_row(
                 ui,
-                "Official table deduction",
+                "Total annual income",
+                format_sek(calculation.annual_income),
+            );
+            if calculation.regular_pension_premiums > 0 {
+                value_row(
+                    ui,
+                    "Regular employer pension premiums",
+                    format_sek(calculation.regular_pension_premiums),
+                );
+            }
+            if calculation.salary_exchange_sacrifice > 0 {
+                value_row(
+                    ui,
+                    "Salary exchanged",
+                    format_sek(calculation.salary_exchange_sacrifice),
+                );
+                value_row(
+                    ui,
+                    "Salary-exchange pension deposit",
+                    format_sek(calculation.salary_exchange_pension_contributions),
+                );
+            }
+            if calculation.employer_pension_contributions > 0 {
+                value_row(
+                    ui,
+                    "Total employer pension contributions",
+                    format_sek(calculation.employer_pension_contributions),
+                );
+            }
+            value_row(
+                ui,
+                "Monthly table deduction",
                 table_deduction_text(calculation.table_deduction),
             );
             value_row(
@@ -482,19 +1361,36 @@ fn comparison(ui: &mut egui::Ui, calculation: Calculation) {
             );
             value_row(
                 ui,
+                "Formula monthly net",
+                format_sek(calculation.formula_monthly_net()),
+            );
+            value_row(
+                ui,
                 "Formula effective rate",
                 format!("{:.2}%", calculation.effective_rate()),
             );
-            match calculation.table_deduction {
-                TaxDeduction::Amount(amount) => {
-                    let difference =
-                        i64::from(calculation.formula_monthly_tax()) - i64::from(amount);
-                    value_row(ui, "Formula minus table", format_signed_sek(difference));
-                }
-                TaxDeduction::Percent(percent) => {
-                    let difference = calculation.effective_rate() - f64::from(percent);
-                    value_row(ui, "Formula minus table", format!("{difference:+.2} pp"));
-                }
+            value_row(
+                ui,
+                "Estimated tax withheld",
+                format_sek(calculation.withheld_tax),
+            );
+            value_row(
+                ui,
+                "Cash after withholding",
+                format_sek(calculation.cash_after_withholding()),
+            );
+            value_row(ui, "Estimated final tax", format_sek(calculation.total_tax));
+            let balance = calculation.tax_balance();
+            if balance > 0 {
+                value_row(ui, "Expected kvarskatt", format_sek(balance as u32));
+            } else if balance < 0 {
+                value_row(
+                    ui,
+                    "Expected refund",
+                    format_sek(balance.unsigned_abs() as u32),
+                );
+            } else {
+                value_row(ui, "Expected balance", format_sek(0));
             }
         });
 }
@@ -509,7 +1405,9 @@ fn income_basis_ceiling_progress(ui: &mut egui::Ui, calculation: Calculation) {
     heading.on_hover_ui(income_basis_help);
     ui.add_space(4.0);
     ui.label(
-        egui::RichText::new("Estimates based only on the selected annual income.")
+        egui::RichText::new(
+            "PGI uses salary and one-time work compensation; SGI uses the annualized recurring salary rate.",
+        )
             .small()
             .color(secondary_text()),
     );
@@ -659,19 +1557,28 @@ fn table_deduction_text(deduction: TaxDeduction) -> String {
     }
 }
 
+fn percentage(amount: u32, percent: u32) -> u32 {
+    (u64::from(amount) * u64::from(percent) / 100).min(u64::from(u32::MAX)) as u32
+}
+
+fn tax_balance_summary(balance: i64) -> String {
+    match balance.cmp(&0) {
+        std::cmp::Ordering::Greater => {
+            format!("Expected kvarskatt: {}", format_sek(balance as u32))
+        }
+        std::cmp::Ordering::Less => format!(
+            "Expected refund: {}",
+            format_sek(balance.unsigned_abs() as u32)
+        ),
+        std::cmp::Ordering::Equal => "Withholding matches final tax".to_owned(),
+    }
+}
+
 fn format_credit(value: u32) -> String {
     if value == 0 {
         format_sek(0)
     } else {
         format!("-{}", format_sek(value))
-    }
-}
-
-fn format_signed_sek(value: i64) -> String {
-    match value.cmp(&0) {
-        std::cmp::Ordering::Greater => format!("+{}", format_sek(value as u32)),
-        std::cmp::Ordering::Less => format!("-{}", format_sek(value.unsigned_abs() as u32)),
-        std::cmp::Ordering::Equal => format_sek(0),
     }
 }
 
@@ -757,84 +1664,103 @@ mod tests {
     #[test]
     fn default_income_is_the_highest_whole_monthly_income_below_the_state_tax_breakpoint() {
         let app = TaxApp::default();
-        let calculation =
-            Calculation::new(app.table, app.selected_column(), app.period, app.income).unwrap();
+        let calculation = Calculation::new(app.table, app.age_group, &app.income_plan).unwrap();
 
-        assert_eq!(app.income, 55_033);
+        assert_eq!(calculation.monthly_income, 55_033);
+        assert_eq!(calculation.annual_income, 660_396);
         assert_eq!(calculation.annual_tax.state_income_tax, 0);
-        assert!(app.income * 12 <= 660_400);
-        assert!((app.income + 1) * 12 > 660_400);
+        assert!(calculation.monthly_income * 12 <= 660_400);
+        assert!((calculation.monthly_income + 1) * 12 > 660_400);
     }
 
     #[test]
-    fn monthly_input_uses_the_exact_monthly_lookup_and_annualizes_income() {
-        let calculation =
-            Calculation::new(34, TaxColumn::Column1, IncomePeriod::Monthly, 18_000).unwrap();
-
-        assert_eq!(calculation.monthly_income, 18_000);
-        assert_eq!(calculation.annual_income, 216_000);
-        assert_eq!(
-            calculation.table_deduction,
-            monthly_deduction(34, TaxColumn::Column1, 18_000).unwrap()
-        );
-        assert_eq!(
-            calculation.annual_tax,
-            annual_tax(34, TaxColumn::Column1, 216_000).unwrap()
-        );
-        assert_eq!(
-            calculation.pension_progress,
-            public_pension_progress(TaxColumn::Column1, 216_000)
-        );
-        assert_eq!(
-            calculation.sgi_progress,
-            estimated_sgi_progress(TaxColumn::Column1, 216_000)
-        );
-        assert_eq!(
-            calculation.formula_monthly_tax(),
-            calculation.annual_tax.total / 12
-        );
-    }
-
-    #[test]
-    fn annual_input_uses_one_twelfth_for_the_table_lookup() {
-        let calculation =
-            Calculation::new(32, TaxColumn::Column3, IncomePeriod::Annual, 420_011).unwrap();
+    fn annual_salary_uses_one_twelfth_for_the_monthly_table_reference() {
+        let plan = IncomePlan::with_annual_salary(420_011);
+        let calculation = Calculation::new(32, TaxAgeGroup::Under66AtYearStart, &plan).unwrap();
 
         assert_eq!(calculation.monthly_income, 35_000);
         assert_eq!(calculation.annual_income, 420_011);
         assert_eq!(
             calculation.table_deduction,
-            monthly_deduction(32, TaxColumn::Column3, 35_000).unwrap()
-        );
-        assert_eq!(
-            calculation.annual_tax,
-            annual_tax(32, TaxColumn::Column3, 420_011).unwrap()
-        );
-        assert_eq!(
-            calculation.pension_progress,
-            public_pension_progress(TaxColumn::Column3, 420_011)
-        );
-        assert_eq!(
-            calculation.sgi_progress,
-            estimated_sgi_progress(TaxColumn::Column3, 420_011)
+            monthly_deduction(32, TaxAgeGroup::Under66AtYearStart.salary_column(), 35_000,)
+                .unwrap()
         );
     }
 
     #[test]
-    fn monthly_and_annual_inputs_produce_the_same_income_basis_progress() {
-        let monthly =
-            Calculation::new(32, TaxColumn::Column1, IncomePeriod::Monthly, 35_000).unwrap();
-        let annual =
-            Calculation::new(32, TaxColumn::Column1, IncomePeriod::Annual, 420_000).unwrap();
+    fn detailed_income_scenario_drives_tax_pgi_sgi_and_withholding() {
+        let mut plan = IncomePlan::with_annual_salary(0);
+        let salary = &mut plan.entries[0];
+        salary.kind = IncomeKind::MonthlySalary;
+        salary.amount = 93_000;
+        salary.start = Date2026::new(1, 1);
+        salary.end = Date2026::new(10, 18);
 
-        assert_eq!(monthly.pension_progress, annual.pension_progress);
-        assert_eq!(monthly.sgi_progress, annual.sgi_progress);
+        let severance_id = plan.add_entry(IncomeKind::OneTimeSalary);
+        plan.entries
+            .iter_mut()
+            .find(|entry| entry.id == severance_id)
+            .unwrap()
+            .amount = 372_000;
+
+        let vacation_id = plan.add_entry(IncomeKind::OneTimeSalary);
+        plan.entries
+            .iter_mut()
+            .find(|entry| entry.id == vacation_id)
+            .unwrap()
+            .amount = 120_528;
+
+        let pension_id = plan.add_entry(IncomeKind::MonthlyOccupationalPension);
+        let pension = plan
+            .entries
+            .iter_mut()
+            .find(|entry| entry.id == pension_id)
+            .unwrap();
+        pension.amount = 27_500;
+        pension.start = Date2026::new(8, 1);
+        pension.payer_role = PayerRole::Secondary;
+
+        let calculation = Calculation::new(32, TaxAgeGroup::Under66AtYearStart, &plan).unwrap();
+
+        assert_eq!(calculation.ordinary_income, 1_521_028);
+        assert_eq!(calculation.monthly_income, 126_752);
+        assert!(calculation.withheld_tax > 0);
+        assert_eq!(
+            calculation.pension_progress,
+            public_pension_progress_for_income(1_383_528)
+        );
+        assert_eq!(
+            calculation.sgi_progress,
+            estimated_sgi_progress_for_income(1_116_000)
+        );
+    }
+
+    #[test]
+    fn dividend_adds_fixed_final_tax_without_default_withholding() {
+        let mut plan = IncomePlan::with_annual_salary(420_000);
+        let dividend_id = plan.add_entry(IncomeKind::OwnCompanyDividend);
+        plan.entries
+            .iter_mut()
+            .find(|entry| entry.id == dividend_id)
+            .unwrap()
+            .amount = 200_000;
+        let calculation = Calculation::new(32, TaxAgeGroup::Under66AtYearStart, &plan).unwrap();
+
+        assert_eq!(calculation.annual_income, 620_000);
+        assert_eq!(calculation.dividend_tax, 40_000);
+        assert_eq!(calculation.total_tax, calculation.annual_tax.total + 40_000);
+        assert_eq!(
+            calculation.withheld_tax,
+            IncomePlan::with_annual_salary(420_000)
+                .estimated_withholding(32, TaxAgeGroup::Under66AtYearStart)
+                .total
+        );
     }
 
     #[test]
     fn marginal_rate_uses_annual_formula() {
-        let calculation =
-            Calculation::new(34, TaxColumn::Column1, IncomePeriod::Annual, 216_000).unwrap();
+        let plan = IncomePlan::with_annual_salary(216_000);
+        let calculation = Calculation::new(34, TaxAgeGroup::Under66AtYearStart, &plan).unwrap();
 
         let expected = f64::from(38_894 - 35_889) * 100.0 / 12_000.0;
         assert_eq!(calculation.marginal_rate, expected);
@@ -842,21 +1768,22 @@ mod tests {
 
     #[test]
     fn zero_income_has_zero_tax_and_a_stable_rate() {
-        let calculation =
-            Calculation::new(33, TaxColumn::Column1, IncomePeriod::Monthly, 0).unwrap();
+        let plan = IncomePlan::with_annual_salary(0);
+        let calculation = Calculation::new(33, TaxAgeGroup::Under66AtYearStart, &plan).unwrap();
 
         assert_eq!(calculation.table_deduction, TaxDeduction::Amount(0));
         assert_eq!(calculation.annual_tax.total, 0);
+        assert_eq!(calculation.withheld_tax, 0);
         assert_eq!(calculation.formula_monthly_net(), 0);
         assert_eq!(calculation.effective_rate(), 0.0);
     }
 
     #[test]
     fn every_published_table_is_available() {
+        let plan = IncomePlan::with_annual_salary(420_000);
         for table in MIN_TAX_TABLE..=MAX_TAX_TABLE {
             assert!(
-                Calculation::new(table, TaxColumn::Column1, IncomePeriod::Monthly, 35_000)
-                    .is_some(),
+                Calculation::new(table, TaxAgeGroup::Under66AtYearStart, &plan).is_some(),
                 "table {table}"
             );
         }
@@ -866,7 +1793,7 @@ mod tests {
     fn formatting_groups_sek_without_locale_dependencies() {
         assert_eq!(format_sek(0), "0 SEK");
         assert_eq!(format_sek(1_234_567), "1 234 567 SEK");
-        assert_eq!(format_signed_sek(-2_400), "-2 400 SEK");
-        assert_eq!(format_signed_sek(350), "+350 SEK");
+        assert_eq!(tax_balance_summary(2_400), "Expected kvarskatt: 2 400 SEK");
+        assert_eq!(tax_balance_summary(-350), "Expected refund: 350 SEK");
     }
 }
