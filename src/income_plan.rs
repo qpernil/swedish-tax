@@ -834,6 +834,70 @@ mod tests {
     }
 
     #[test]
+    fn complete_salary_vacation_lump_sum_and_maximum_exchange_scenario() {
+        const MONTHLY_SALARY: u32 = 93_000;
+
+        let mut plan = IncomePlan::with_monthly_salary(MONTHLY_SALARY);
+        let salary = &mut plan.entries[0];
+        salary.start = Date2026::new(1, 1);
+        salary.end = Date2026::new(10, 18);
+        salary.vacation_compensation = Some(VacationCompensation::suggested(
+            30,
+            salary.start,
+            salary.end,
+        ));
+
+        assert_eq!(salary.annual_amount(), 891_000);
+        assert_eq!(salary.regular_pension_premium_amount(), 139_954);
+        assert_eq!(salary.vacation_compensation.unwrap().payout_days, 24);
+        assert_eq!(salary.vacation_compensation_amount(), 115_883);
+        assert_eq!(salary.vacation_pension_premium_amount(), 34_765);
+
+        let lump_id = plan.add_entry(IncomeKind::OneTimeSalary);
+        let lump = plan
+            .entries
+            .iter_mut()
+            .find(|entry| entry.id == lump_id)
+            .unwrap();
+        lump.amount = MONTHLY_SALARY * 4;
+        lump.salary_exchange = Some(SalaryExchange::new());
+
+        let allowance = plan.salary_exchange_allowance(lump_id).unwrap();
+        assert_eq!(allowance.pension_salary_basis_before, 1_006_883);
+        assert_eq!(allowance.ceiling, 352_409);
+        assert_eq!(allowance.available_contribution, 177_690);
+        assert_eq!(allowance.maximum_sacrifice, 168_012);
+
+        let lump = plan
+            .entries
+            .iter_mut()
+            .find(|entry| entry.id == lump_id)
+            .unwrap();
+        lump.salary_exchange.as_mut().unwrap().sacrificed_salary = allowance.maximum_sacrifice;
+        assert_eq!(lump.total_annual_amount(), 203_988);
+        assert_eq!(lump.salary_exchange_pension_contribution(), 177_689);
+
+        let totals = plan.totals();
+        assert_eq!(totals.work_income, 1_210_871);
+        assert_eq!(totals.pension_salary_basis, 1_006_883);
+        assert_eq!(totals.regular_pension_premiums, 139_954);
+        assert_eq!(totals.vacation_pension_premiums, 34_765);
+        assert_eq!(totals.salary_exchange_sacrifice, 168_012);
+        assert_eq!(totals.salary_exchange_pension_contributions, 177_689);
+        assert_eq!(totals.total_employer_pension_contributions(), 352_408);
+
+        let mut one_krona_too_much = SalaryExchange::new();
+        one_krona_too_much.sacrificed_salary = allowance.maximum_sacrifice + 1;
+        assert!(
+            totals
+                .regular_pension_premiums
+                .saturating_add(totals.vacation_pension_premiums)
+                .saturating_add(one_krona_too_much.pension_contribution())
+                > allowance.ceiling
+        );
+    }
+
+    #[test]
     fn same_year_vacation_compensation_is_suggested_but_days_remain_editable() {
         let mut entry = IncomeEntry::new(1, IncomeKind::MonthlySalary);
         entry.amount = 93_000;
