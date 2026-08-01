@@ -2,8 +2,9 @@ use eframe::egui;
 use swedish_tax::{
     AnnualTax, AppliedWithholding, Date2026, EntryWithholding, IncomeBasisEstimate, IncomeEntry,
     IncomeKind, IncomePlan, MAX_TAX_TABLE, MIN_TAX_TABLE, PayerRole, RegularPensionPremium,
-    SalaryExchange, TaxAgeGroup, TaxDeduction, VacationCompensation, annual_tax_for_income_profile,
-    estimated_sgi_progress_for_income, monthly_deduction, public_pension_progress_for_income,
+    SalaryExchange, TaxAgeGroup, TaxColumn, TaxDeduction, VacationCompensation,
+    annual_tax_for_income_profile, estimated_sgi_progress_for_income, monthly_deduction,
+    public_pension_progress_for_income,
 };
 
 const MAX_INCOME: u32 = 100_000_000;
@@ -82,13 +83,16 @@ impl Calculation {
         })
     }
 
-    const fn formula_monthly_tax(self) -> u32 {
-        self.annual_tax.total / 12
+    fn table_reference_tax(self) -> u32 {
+        match self.table_deduction {
+            TaxDeduction::Amount(amount) => amount,
+            TaxDeduction::Percent(percent) => percentage(self.monthly_income, percent),
+        }
     }
 
-    const fn formula_monthly_net(self) -> u32 {
+    fn table_reference_net(self) -> u32 {
         self.monthly_income
-            .saturating_sub(self.formula_monthly_tax())
+            .saturating_sub(self.table_reference_tax())
     }
 
     fn effective_rate(self) -> f64 {
@@ -249,13 +253,6 @@ impl TaxApp {
 
         let summaries = [
             (
-                "Monthly table reference",
-                table_deduction_text(calculation.table_deduction),
-                None,
-                blue_color(),
-                None,
-            ),
-            (
                 "Final tax estimate",
                 format_sek(calculation.total_tax),
                 Some(format!("Marginal tax: {:.1}%", calculation.marginal_rate)),
@@ -263,7 +260,17 @@ impl TaxApp {
                 Some(marginal_rate_help as HoverHelp),
             ),
             (
-                "Annual net",
+                "Calculated withholding",
+                format_sek(calculation.withheld_tax),
+                Some(format!(
+                    "Cash after withholding: {}",
+                    format_sek(calculation.cash_after_withholding())
+                )),
+                blue_color(),
+                None,
+            ),
+            (
+                "Annual net after final tax",
                 format_sek(calculation.annual_net()),
                 Some(tax_balance_summary(calculation.tax_balance())),
                 primary_text(),
@@ -273,7 +280,12 @@ impl TaxApp {
         summary_tiles(ui, &summaries);
 
         ui.add_space(24.0);
-        comparison(ui, calculation);
+        annual_reconciliation(ui, calculation);
+
+        ui.add_space(24.0);
+        ui.separator();
+        ui.add_space(18.0);
+        monthly_table_reference(ui, calculation, self.table, self.age_group.salary_column());
 
         ui.add_space(24.0);
         ui.separator();
@@ -1516,9 +1528,9 @@ fn summary_tile(
         });
 }
 
-fn comparison(ui: &mut egui::Ui, calculation: Calculation) {
+fn annual_reconciliation(ui: &mut egui::Ui, calculation: Calculation) {
     ui.label(
-        egui::RichText::new("Monthly view and annual reconciliation")
+        egui::RichText::new("Annual reconciliation")
             .strong()
             .size(17.0)
             .color(primary_text()),
@@ -1537,11 +1549,6 @@ fn comparison(ui: &mut egui::Ui, calculation: Calculation) {
         .striped(true)
         .min_col_width(220.0)
         .show(ui, |ui| {
-            value_row(
-                ui,
-                "Average monthly taxable income",
-                format_sek(calculation.monthly_income),
-            );
             value_row(
                 ui,
                 "Taxable salary and pension",
@@ -1602,22 +1609,7 @@ fn comparison(ui: &mut egui::Ui, calculation: Calculation) {
             }
             value_row(
                 ui,
-                "Monthly table deduction",
-                table_deduction_text(calculation.table_deduction),
-            );
-            value_row(
-                ui,
-                "Formula tax per month",
-                format_sek(calculation.formula_monthly_tax()),
-            );
-            value_row(
-                ui,
-                "Formula monthly net",
-                format_sek(calculation.formula_monthly_net()),
-            );
-            value_row(
-                ui,
-                "Formula effective rate",
+                "Effective final tax rate",
                 format!("{:.2}%", calculation.effective_rate()),
             );
             value_row(
@@ -1643,6 +1635,50 @@ fn comparison(ui: &mut egui::Ui, calculation: Calculation) {
             } else {
                 value_row(ui, "Expected balance", format_sek(0));
             }
+        });
+}
+
+fn monthly_table_reference(
+    ui: &mut egui::Ui,
+    calculation: Calculation,
+    table: u8,
+    salary_column: TaxColumn,
+) {
+    ui.label(
+        egui::RichText::new("Monthly table reference")
+            .strong()
+            .size(17.0)
+            .color(primary_text()),
+    );
+    ui.add_space(4.0);
+    ui.label(
+        egui::RichText::new(
+            "Reference only: annual taxable salary and pension divided by 12, then looked up as salary in the selected table. Actual payer withholding is calculated separately above.",
+        )
+        .small()
+        .color(secondary_text()),
+    );
+    ui.add_space(8.0);
+    egui::Grid::new("monthly-table-reference-grid")
+        .num_columns(2)
+        .striped(true)
+        .min_col_width(220.0)
+        .show(ui, |ui| {
+            value_row(
+                ui,
+                "Average monthly taxable income",
+                format_sek(calculation.monthly_income),
+            );
+            value_row(
+                ui,
+                &format!("Table {table}, salary column {}", salary_column as u8),
+                table_deduction_text(calculation.table_deduction),
+            );
+            value_row(
+                ui,
+                "Cash after table deduction",
+                format_sek(calculation.table_reference_net()),
+            );
         });
 }
 
@@ -2034,7 +2070,7 @@ mod tests {
         assert_eq!(calculation.table_deduction, TaxDeduction::Amount(0));
         assert_eq!(calculation.annual_tax.total, 0);
         assert_eq!(calculation.withheld_tax, 0);
-        assert_eq!(calculation.formula_monthly_net(), 0);
+        assert_eq!(calculation.table_reference_net(), 0);
         assert_eq!(calculation.effective_rate(), 0.0);
     }
 
