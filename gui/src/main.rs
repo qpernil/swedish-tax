@@ -392,6 +392,14 @@ impl TaxApp {
                 let withholding = self
                     .income_plan
                     .estimated_withholding(self.table, self.age_group);
+                let pension_component_count = [
+                    totals.regular_pension_premiums,
+                    totals.vacation_pension_premiums,
+                    totals.salary_exchange_pension_contributions,
+                ]
+                .into_iter()
+                .filter(|amount| *amount > 0)
+                .count();
                 egui::Grid::new("income-calculator-totals")
                     .num_columns(2)
                     .striped(true)
@@ -399,31 +407,47 @@ impl TaxApp {
                         value_row(ui, "Salary and compensation", format_sek(totals.work_income));
                         value_row(ui, "Tjänstepension", format_sek(totals.pension_income));
                         value_row(ui, "Own-AB dividend", format_sek(totals.dividend_income));
-                        value_row(
-                            ui,
-                            "Regular employer pension premiums",
-                            format_sek(totals.regular_pension_premiums),
-                        );
-                        value_row(
-                            ui,
-                            "Vacation-payout pension premium",
-                            format_sek(totals.vacation_pension_premiums),
-                        );
-                        value_row(
-                            ui,
-                            "Salary exchanged",
-                            format_sek(totals.salary_exchange_sacrifice),
-                        );
-                        value_row(
-                            ui,
-                            "Salary-exchange pension deposits",
-                            format_sek(totals.salary_exchange_pension_contributions),
-                        );
-                        value_row(
-                            ui,
-                            "Total employer pension contributions",
-                            format_sek(totals.total_employer_pension_contributions()),
-                        );
+                        if pension_component_count > 1 {
+                            if totals.regular_pension_premiums > 0 {
+                                value_row(
+                                    ui,
+                                    "Regular pension premium",
+                                    format_sek(totals.regular_pension_premiums),
+                                );
+                            }
+                            if totals.vacation_pension_premiums > 0 {
+                                value_row(
+                                    ui,
+                                    "Vacation-payout pension premium",
+                                    format_sek(totals.vacation_pension_premiums),
+                                );
+                            }
+                            if totals.salary_exchange_pension_contributions > 0 {
+                                value_row(
+                                    ui,
+                                    "Salary-exchange pension deposit",
+                                    format_sek(totals.salary_exchange_pension_contributions),
+                                );
+                            }
+                        }
+                        if totals.salary_exchange_sacrifice > 0 {
+                            value_row(
+                                ui,
+                                "Salary exchanged",
+                                format_sek(totals.salary_exchange_sacrifice),
+                            );
+                        }
+                        if pension_component_count > 0 {
+                            value_row(
+                                ui,
+                                if pension_component_count > 1 {
+                                    "Total employer pension contributions"
+                                } else {
+                                    "Employer pension contributions"
+                                },
+                                format_sek(totals.total_employer_pension_contributions()),
+                            );
+                        }
                         value_row(ui, "Total annual income", format_sek(totals.gross_income()));
                         value_row(ui, "Estimated tax withheld", format_sek(withholding.total));
                     });
@@ -1386,6 +1410,14 @@ fn comparison(ui: &mut egui::Ui, calculation: Calculation) {
             .color(primary_text()),
     );
     ui.add_space(8.0);
+    let pension_component_count = [
+        calculation.regular_pension_premiums,
+        calculation.vacation_pension_premiums,
+        calculation.salary_exchange_pension_contributions,
+    ]
+    .into_iter()
+    .filter(|amount| *amount > 0)
+    .count();
     egui::Grid::new("comparison-grid")
         .num_columns(2)
         .striped(true)
@@ -1413,19 +1445,28 @@ fn comparison(ui: &mut egui::Ui, calculation: Calculation) {
                     format_sek(calculation.annual_income),
                 );
             }
-            if calculation.regular_pension_premiums > 0 {
-                value_row(
-                    ui,
-                    "Regular employer pension premiums",
-                    format_sek(calculation.regular_pension_premiums),
-                );
-            }
-            if calculation.vacation_pension_premiums > 0 {
-                value_row(
-                    ui,
-                    "Vacation-payout pension premium",
-                    format_sek(calculation.vacation_pension_premiums),
-                );
+            if pension_component_count > 1 {
+                if calculation.regular_pension_premiums > 0 {
+                    value_row(
+                        ui,
+                        "Regular pension premium",
+                        format_sek(calculation.regular_pension_premiums),
+                    );
+                }
+                if calculation.vacation_pension_premiums > 0 {
+                    value_row(
+                        ui,
+                        "Vacation-payout pension premium",
+                        format_sek(calculation.vacation_pension_premiums),
+                    );
+                }
+                if calculation.salary_exchange_pension_contributions > 0 {
+                    value_row(
+                        ui,
+                        "Salary-exchange pension deposit",
+                        format_sek(calculation.salary_exchange_pension_contributions),
+                    );
+                }
             }
             if calculation.salary_exchange_sacrifice > 0 {
                 value_row(
@@ -1433,16 +1474,15 @@ fn comparison(ui: &mut egui::Ui, calculation: Calculation) {
                     "Salary exchanged",
                     format_sek(calculation.salary_exchange_sacrifice),
                 );
-                value_row(
-                    ui,
-                    "Salary-exchange pension deposit",
-                    format_sek(calculation.salary_exchange_pension_contributions),
-                );
             }
             if calculation.employer_pension_contributions > 0 {
                 value_row(
                     ui,
-                    "Total employer pension contributions",
+                    if pension_component_count > 1 {
+                        "Total employer pension contributions"
+                    } else {
+                        "Employer pension contributions"
+                    },
                     format_sek(calculation.employer_pension_contributions),
                 );
             }
