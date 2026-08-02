@@ -320,6 +320,13 @@ impl IncomeEntry {
             adjustment_available && payer_role == PayerRole::Main && !self.kind.is_dividend();
     }
 
+    pub fn set_custom_withholding_enabled(&mut self, enabled: bool) {
+        if enabled == self.custom_withholding_percent.is_some() {
+            return;
+        }
+        self.custom_withholding_percent = enabled.then_some(30);
+    }
+
     pub fn annual_amount(&self) -> u32 {
         if self.kind.is_monthly() {
             (1..=12)
@@ -1394,6 +1401,17 @@ mod tests {
         plan.entries[0].set_payer_role(PayerRole::Main, true);
 
         assert!(!plan.entries[0].adjustment_applies);
+    }
+
+    #[test]
+    fn custom_withholding_editor_default_comes_from_the_income_entry() {
+        let mut entry = IncomeEntry::new(1, IncomeKind::AnnualSalary);
+
+        entry.set_custom_withholding_enabled(true);
+        assert_eq!(entry.custom_withholding_percent, Some(30));
+
+        entry.set_custom_withholding_enabled(false);
+        assert_eq!(entry.custom_withholding_percent, None);
     }
 
     #[test]

@@ -1,11 +1,11 @@
 use eframe::egui;
 use swedish_tax::{
-    AdjustmentCalibration, AnnualTax, AppliedWithholding, Calculation, DEFAULT_MONTHLY_INCOME,
-    DIVIDEND_TAX_PERCENT, Date2026, EntryWithholding, IncomeBasisEstimate, IncomeEntry, IncomeKind,
-    IncomePlan, IncomePlanValidationIssue, IncomeTaxCategory, MAX_TAX_TABLE, MIN_TAX_TABLE,
-    PayerRole, PersistedAppState, RegularPensionPremium, SECONDARY_WITHHOLDING_PERCENT,
-    SalaryExchange, SalaryExchangeContext, TaxAgeGroup, TaxBalance, TaxColumn, TaxDeduction,
-    VacationCompensation, WithholdingSummary,
+    AdjustmentCalibration, AnnualTax, AppliedWithholding, Calculation, DIVIDEND_TAX_PERCENT,
+    Date2026, EntryWithholding, IncomeBasisEstimate, IncomeEntry, IncomeKind, IncomePlan,
+    IncomePlanValidationIssue, IncomeTaxCategory, MAX_TAX_TABLE, MIN_TAX_TABLE, PayerRole,
+    PersistedAppState, RegularPensionPremium, SECONDARY_WITHHOLDING_PERCENT, SalaryExchange,
+    SalaryExchangeContext, TaxAgeGroup, TaxBalance, TaxColumn, TaxDeduction, VacationCompensation,
+    WithholdingSummary,
 };
 
 const MAX_INCOME: u32 = 100_000_000;
@@ -32,15 +32,7 @@ struct TaxApp {
 
 impl Default for TaxApp {
     fn default() -> Self {
-        let income_plan = IncomePlan::with_monthly_salary(DEFAULT_MONTHLY_INCOME);
-        Self {
-            table: 32,
-            age_group: TaxAgeGroup::Under66AtYearStart,
-            selected_income_entry: income_plan.entries.first().map(|entry| entry.id),
-            income_plan,
-            income_editor_open: false,
-            calculation_trace_open: false,
-        }
+        Self::from_persisted_state(PersistedAppState::default())
     }
 }
 
@@ -1318,13 +1310,14 @@ fn income_entry_editor(
 
                 let mut custom = entry.custom_withholding_percent.is_some();
                 if ui.checkbox(&mut custom, "Custom withholding").changed() {
-                    entry.custom_withholding_percent = custom.then_some(30);
+                    entry.set_custom_withholding_enabled(custom);
                 }
                 if let Some(percent) = &mut entry.custom_withholding_percent {
                     percentage_editor(ui, "custom-withholding", percent);
                 }
                 ui.label(eligibility_badge(income_eligibility(entry.kind)));
             }
+
             if let Some(withholding) = withholding {
                 ui.add_space(6.0);
                 ui.label(
