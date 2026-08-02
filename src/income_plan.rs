@@ -46,6 +46,13 @@ pub enum IncomeKind {
     OwnCompanyDividend,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum IncomeTaxCategory {
+    Work,
+    Pension,
+    Dividend,
+}
+
 impl IncomeKind {
     pub const ALL: [Self; 6] = [
         Self::AnnualSalary,
@@ -81,6 +88,27 @@ impl IncomeKind {
             Self::MonthlyOccupationalPension | Self::AnnualOccupationalPension
         )
     }
+
+    pub const fn tax_category(self) -> IncomeTaxCategory {
+        if self.is_dividend() {
+            IncomeTaxCategory::Dividend
+        } else if self.is_pension() {
+            IncomeTaxCategory::Pension
+        } else {
+            IncomeTaxCategory::Work
+        }
+    }
+
+    pub const fn is_pgi_eligible(self) -> bool {
+        matches!(
+            self,
+            Self::AnnualSalary | Self::MonthlySalary | Self::OneTimeSalary
+        )
+    }
+
+    pub const fn is_sgi_eligible(self) -> bool {
+        matches!(self, Self::AnnualSalary | Self::MonthlySalary)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -97,6 +125,7 @@ pub const REGULAR_PENSION_UPPER_RATE_BASIS_POINTS: u32 = 3_000;
 pub const EMPLOYER_PENSION_ALLOWANCE_RATE_BASIS_POINTS: u32 = 3_500;
 pub const EMPLOYER_PENSION_ALLOWANCE_MAXIMUM: u32 = 592_000;
 pub const DEFAULT_SALARY_EXCHANGE_UPLIFT_BASIS_POINTS: u32 = 576;
+pub const SECONDARY_WITHHOLDING_PERCENT: u32 = 30;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct RegularPensionPremium {
@@ -246,6 +275,32 @@ impl IncomeEntry {
         }
     }
 
+    /// Changes the income kind and resets fields that are not meaningful for
+    /// the new kind. UI clients should use this instead of reproducing these
+    /// domain invariants.
+    pub fn set_kind(&mut self, kind: IncomeKind) {
+        if self.kind == kind {
+            return;
+        }
+        self.kind = kind;
+        self.included_in_pension_salary_basis =
+            matches!(kind, IncomeKind::AnnualSalary | IncomeKind::MonthlySalary);
+        if matches!(kind, IncomeKind::AnnualSalary | IncomeKind::MonthlySalary)
+            && self.regular_pension_premium.is_none()
+        {
+            self.regular_pension_premium = Some(RegularPensionPremium::default());
+        }
+        if kind != IncomeKind::OneTimeSalary {
+            self.salary_exchange = None;
+        }
+        if kind != IncomeKind::MonthlySalary {
+            self.vacation_compensation = None;
+        }
+        if !matches!(kind, IncomeKind::AnnualSalary | IncomeKind::MonthlySalary) {
+            self.use_full_year_projection_as_adjustment_basis = false;
+        }
+    }
+
     pub fn annual_amount(&self) -> u32 {
         if self.kind.is_monthly() {
             (1..=12)
@@ -283,6 +338,38 @@ impl IncomeEntry {
         self.annual_amount()
             .saturating_add(self.vacation_compensation_amount())
             .saturating_sub(self.salary_exchange_sacrifice())
+    }
+
+    pub fn pgi_eligible_income(&self) -> Option<u32> {
+        self.kind
+            .is_pgi_eligible()
+            .then(|| self.total_annual_amount())
+    }
+
+    pub fn sgi_annual_rate(&self) -> Option<u32> {
+        match self.kind {
+            IncomeKind::AnnualSalary => Some(self.total_annual_amount()),
+            IncomeKind::MonthlySalary => Some(self.amount.saturating_mul(12)),
+            _ => None,
+        }
+    }
+
+    pub fn total_employer_pension_contribution(&self) -> u32 {
+        self.regular_pension_premium_amount()
+            .saturating_add(self.vacation_pension_premium_amount())
+            .saturating_add(self.salary_exchange_pension_contribution())
+    }
+
+    pub fn regular_pension_benchmark_monthly(&self) -> Option<u32> {
+        match self.kind {
+            IncomeKind::AnnualSalary => {
+                Some(RegularPensionPremium::benchmark_monthly(self.amount / 12))
+            }
+            IncomeKind::MonthlySalary => {
+                Some(RegularPensionPremium::benchmark_monthly(self.amount))
+            }
+            _ => None,
+        }
     }
 
     pub fn full_year_adjustment_basis_amount(&self) -> u32 {
@@ -434,6 +521,17 @@ impl VacationCompensation {
             .saturating_mul(NUMERATOR_PER_DAY);
         ((numerator + DENOMINATOR / 2) / DENOMINATOR).min(u64::from(u32::MAX)) as u32
     }
+
+    pub fn amount_per_day(monthly_salary: u32) -> f64 {
+        f64::from(monthly_salary) / 21.0 + f64::from(monthly_salary) * 0.0043
+    }
+
+    pub fn additional_benchmark_pension_premium(self, monthly_salary: u32) -> u32 {
+        RegularPensionPremium::benchmark_monthly(
+            monthly_salary.saturating_add(self.amount(monthly_salary)),
+        )
+        .saturating_sub(RegularPensionPremium::benchmark_monthly(monthly_salary))
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -484,45 +582,52 @@ impl IncomePlan {
         self.entries.iter().all(IncomeEntry::is_valid)
     }
 
+    /// Whether the plan can be represented by the GUI's simple monthly table
+    /// reference without hiding payer or period differences.
+    pub fn has_uniform_monthly_table_reference(&self) -> bool {
+        let [entry] = self.entries.as_slice() else {
+            return false;
+        };
+        if entry.payer_role != PayerRole::Main
+            || entry.adjustment_applies
+            || entry.custom_withholding_percent.is_some()
+            || entry.vacation_compensation_amount() > 0
+        {
+            return false;
+        }
+        match entry.kind {
+            IncomeKind::AnnualSalary => true,
+            IncomeKind::MonthlySalary => {
+                entry.start.clamped() == Date2026::new(1, 1)
+                    && entry.end.clamped() == Date2026::new(12, 31)
+            }
+            _ => false,
+        }
+    }
+
+    pub fn salary_exchange_context(&self, entry_id: u64) -> Option<SalaryExchangeContext> {
+        let entry = self.entries.iter().find(|entry| entry.id == entry_id)?;
+        let totals = self.totals();
+        Some(SalaryExchangeContext {
+            regular_pension_premiums: totals.regular_pension_premiums,
+            vacation_pension_premiums: totals.vacation_pension_premiums,
+            other_exchange_contributions: totals
+                .salary_exchange_pension_contributions
+                .saturating_sub(entry.salary_exchange_pension_contribution()),
+            other_pension_salary_basis: totals
+                .pension_salary_basis
+                .saturating_sub(entry.pension_salary_basis_amount()),
+        })
+    }
+
     pub fn salary_exchange_allowance(&self, entry_id: u64) -> Option<SalaryExchangeAllowance> {
         let entry = self.entries.iter().find(|entry| entry.id == entry_id)?;
         let exchange = entry.salary_exchange?;
-        let totals = self.totals();
-        let selected_sacrifice = entry.salary_exchange_sacrifice();
-        let other_exchange_contributions = totals
-            .salary_exchange_pension_contributions
-            .saturating_sub(entry.salary_exchange_pension_contribution());
-        let pension_contributions_before = totals
-            .regular_pension_premiums
-            .saturating_add(totals.vacation_pension_premiums)
-            .saturating_add(other_exchange_contributions);
-        let sacrifice_in_basis = if entry.included_in_pension_salary_basis {
-            selected_sacrifice
-        } else {
-            0
-        };
-        let pension_salary_basis_before = totals
-            .pension_salary_basis
-            .saturating_add(sacrifice_in_basis);
-        let pension_salary_basis_after =
-            pension_salary_basis_before.saturating_sub(sacrifice_in_basis);
-        let ceiling = SalaryExchange::allowance_ceiling(pension_salary_basis_after);
-        let available_contribution = ceiling.saturating_sub(pension_contributions_before);
-        Some(SalaryExchangeAllowance {
-            ceiling,
-            pension_salary_basis_before,
-            pension_salary_basis_after,
-            regular_pension_premiums: totals.regular_pension_premiums,
-            vacation_pension_premiums: totals.vacation_pension_premiums,
-            other_exchange_contributions,
-            available_contribution,
-            maximum_sacrifice: exchange.maximum_sacrifice(
-                entry.amount,
-                pension_salary_basis_before,
-                pension_contributions_before,
-                entry.included_in_pension_salary_basis,
-            ),
-        })
+        Some(self.salary_exchange_context(entry_id)?.allowance_for(
+            entry.amount,
+            entry.included_in_pension_salary_basis,
+            exchange,
+        ))
     }
 
     pub fn totals(&self) -> IncomePlanTotals {
@@ -547,29 +652,19 @@ impl IncomePlan {
             totals.salary_exchange_pension_contributions = totals
                 .salary_exchange_pension_contributions
                 .saturating_add(entry.salary_exchange_pension_contribution());
-            match entry.kind {
-                IncomeKind::AnnualSalary
-                | IncomeKind::MonthlySalary
-                | IncomeKind::OneTimeSalary => {
-                    totals.work_income = totals.work_income.saturating_add(amount);
+            match entry.kind.tax_category() {
+                IncomeTaxCategory::Work => {
+                    totals.work_income = totals.work_income.saturating_add(amount)
                 }
-                IncomeKind::MonthlyOccupationalPension | IncomeKind::AnnualOccupationalPension => {
-                    totals.pension_income = totals.pension_income.saturating_add(amount);
+                IncomeTaxCategory::Pension => {
+                    totals.pension_income = totals.pension_income.saturating_add(amount)
                 }
-                IncomeKind::OwnCompanyDividend => {
-                    totals.dividend_income = totals.dividend_income.saturating_add(amount);
+                IncomeTaxCategory::Dividend => {
+                    totals.dividend_income = totals.dividend_income.saturating_add(amount)
                 }
             }
-            match entry.kind {
-                IncomeKind::AnnualSalary => {
-                    totals.sgi_annual_rate = totals.sgi_annual_rate.saturating_add(amount);
-                }
-                IncomeKind::MonthlySalary => {
-                    totals.sgi_annual_rate = totals
-                        .sgi_annual_rate
-                        .saturating_add(entry.amount.saturating_mul(12));
-                }
-                _ => {}
+            if let Some(sgi_annual_rate) = entry.sgi_annual_rate() {
+                totals.sgi_annual_rate = totals.sgi_annual_rate.saturating_add(sgi_annual_rate);
             }
         }
         totals
@@ -581,12 +676,15 @@ impl IncomePlan {
         let mut total = 0_u32;
         for entry in &self.entries {
             let gross = entry.total_annual_amount();
-            let (withheld, rule) = self.entry_withholding(entry, gross, totals, table, age_group);
+            let (withheld, regular_withheld, supplemental_withheld, rule) =
+                self.entry_withholding(entry, gross, totals, table, age_group);
             total = total.saturating_add(withheld);
             entries.push(EntryWithholding {
                 entry_id: entry.id,
                 gross,
                 withheld,
+                regular_withheld,
+                supplemental_withheld,
                 rule,
             });
         }
@@ -600,26 +698,33 @@ impl IncomePlan {
         totals: IncomePlanTotals,
         table: u8,
         age_group: TaxAgeGroup,
-    ) -> (u32, AppliedWithholding) {
+    ) -> (u32, u32, u32, AppliedWithholding) {
         if entry.kind.is_dividend() {
-            return (0, AppliedWithholding::None);
+            return (0, 0, 0, AppliedWithholding::None);
         }
         if let Some(percent) = entry.custom_withholding_percent {
+            let withheld = percentage(gross, percent);
             return (
-                percentage(gross, percent),
+                withheld,
+                withheld,
+                0,
                 AppliedWithholding::CustomPercent(percent),
             );
         }
         if entry.adjustment_applies {
             if let Some(percent) = self.adjustment_percent {
+                let withheld = percentage(gross, percent);
                 return (
-                    percentage(gross, percent),
+                    withheld,
+                    withheld,
+                    0,
                     AppliedWithholding::AdjustmentPercent(percent),
                 );
             }
         }
         if entry.payer_role == PayerRole::Secondary {
-            return (percentage(gross, 30), AppliedWithholding::Secondary30);
+            let withheld = percentage(gross, SECONDARY_WITHHOLDING_PERCENT);
+            return (withheld, withheld, 0, AppliedWithholding::Secondary30);
         }
 
         let column = if entry.kind.is_pension() {
@@ -629,8 +734,11 @@ impl IncomePlan {
         };
         if entry.kind == IncomeKind::OneTimeSalary {
             let percent = one_time_withholding_rate(column, totals.work_income);
+            let withheld = percentage(gross, percent);
             return (
-                percentage(gross, percent),
+                withheld,
+                withheld,
+                0,
                 AppliedWithholding::OneTimeTable(percent),
             );
         }
@@ -645,12 +753,20 @@ impl IncomePlan {
         };
         let vacation_gross = entry.vacation_compensation_amount();
         if vacation_gross == 0 {
-            return (regular_withheld, AppliedWithholding::Table(column));
+            return (
+                regular_withheld,
+                regular_withheld,
+                0,
+                AppliedWithholding::Table(column),
+            );
         }
 
         let percent = one_time_withholding_rate(column, totals.work_income);
+        let supplemental_withheld = percentage(vacation_gross, percent);
         (
-            regular_withheld.saturating_add(percentage(vacation_gross, percent)),
+            regular_withheld.saturating_add(supplemental_withheld),
+            regular_withheld,
+            supplemental_withheld,
             AppliedWithholding::TableAndOneTime(column, percent),
         )
     }
@@ -710,6 +826,60 @@ pub struct SalaryExchangeAllowance {
     pub maximum_sacrifice: u32,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct SalaryExchangeContext {
+    regular_pension_premiums: u32,
+    vacation_pension_premiums: u32,
+    other_exchange_contributions: u32,
+    other_pension_salary_basis: u32,
+}
+
+impl SalaryExchangeContext {
+    pub fn allowance_for(
+        self,
+        payment_amount: u32,
+        included_in_pension_salary_basis: bool,
+        exchange: SalaryExchange,
+    ) -> SalaryExchangeAllowance {
+        let pension_contributions_before = self
+            .regular_pension_premiums
+            .saturating_add(self.vacation_pension_premiums)
+            .saturating_add(self.other_exchange_contributions);
+        let payment_in_basis = if included_in_pension_salary_basis {
+            payment_amount
+        } else {
+            0
+        };
+        let pension_salary_basis_before = self
+            .other_pension_salary_basis
+            .saturating_add(payment_in_basis);
+        let maximum_sacrifice = exchange.maximum_sacrifice(
+            payment_amount,
+            pension_salary_basis_before,
+            pension_contributions_before,
+            included_in_pension_salary_basis,
+        );
+        let sacrifice = exchange.sacrificed_salary.min(maximum_sacrifice);
+        let pension_salary_basis_after = if included_in_pension_salary_basis {
+            pension_salary_basis_before.saturating_sub(sacrifice)
+        } else {
+            pension_salary_basis_before
+        };
+        let ceiling = SalaryExchange::allowance_ceiling(pension_salary_basis_after);
+
+        SalaryExchangeAllowance {
+            ceiling,
+            pension_salary_basis_before,
+            pension_salary_basis_after,
+            regular_pension_premiums: self.regular_pension_premiums,
+            vacation_pension_premiums: self.vacation_pension_premiums,
+            other_exchange_contributions: self.other_exchange_contributions,
+            available_contribution: ceiling.saturating_sub(pension_contributions_before),
+            maximum_sacrifice,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AppliedWithholding {
     Table(TaxColumn),
@@ -726,6 +896,8 @@ pub struct EntryWithholding {
     pub entry_id: u64,
     pub gross: u32,
     pub withheld: u32,
+    pub regular_withheld: u32,
+    pub supplemental_withheld: u32,
     pub rule: AppliedWithholding,
 }
 

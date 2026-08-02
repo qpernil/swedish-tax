@@ -15,9 +15,14 @@
 //! rows are returned as percentages so callers can apply the required
 //! rounding policy explicitly.
 
+mod calculation;
 mod income_bases;
 mod income_plan;
 mod withholding;
+
+pub use calculation::{
+    AdjustmentCalibration, Calculation, DEFAULT_MONTHLY_INCOME, DIVIDEND_TAX_PERCENT,
+};
 
 pub use income_bases::{
     estimated_sgi_progress, estimated_sgi_progress_for_income, public_pension_progress,
@@ -27,11 +32,12 @@ pub use income_bases::{
 };
 pub use income_plan::{
     AppliedWithholding, Date2026, EntryWithholding, IncomeEntry, IncomeKind, IncomePlan,
-    IncomePlanTotals, PayerRole, RegularPensionPremium, SalaryExchange, SalaryExchangeAllowance,
-    VacationCompensation, WithholdingSummary, DEFAULT_SALARY_EXCHANGE_UPLIFT_BASIS_POINTS,
-    EMPLOYER_PENSION_ALLOWANCE_MAXIMUM, EMPLOYER_PENSION_ALLOWANCE_RATE_BASIS_POINTS,
-    REGULAR_PENSION_LOWER_RATE_BASIS_POINTS, REGULAR_PENSION_MONTHLY_THRESHOLD,
-    REGULAR_PENSION_UPPER_RATE_BASIS_POINTS,
+    IncomePlanTotals, IncomeTaxCategory, PayerRole, RegularPensionPremium, SalaryExchange,
+    SalaryExchangeAllowance, SalaryExchangeContext, VacationCompensation, WithholdingSummary,
+    DEFAULT_SALARY_EXCHANGE_UPLIFT_BASIS_POINTS, EMPLOYER_PENSION_ALLOWANCE_MAXIMUM,
+    EMPLOYER_PENSION_ALLOWANCE_RATE_BASIS_POINTS, REGULAR_PENSION_LOWER_RATE_BASIS_POINTS,
+    REGULAR_PENSION_MONTHLY_THRESHOLD, REGULAR_PENSION_UPPER_RATE_BASIS_POINTS,
+    SECONDARY_WITHHOLDING_PERCENT,
 };
 pub use withholding::one_time_withholding_rate;
 
