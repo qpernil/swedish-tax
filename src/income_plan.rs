@@ -280,10 +280,11 @@ impl IncomeEntry {
     /// Changes the income kind and resets fields that are not meaningful for
     /// the new kind. UI clients should use this instead of reproducing these
     /// domain invariants.
-    pub fn set_kind(&mut self, kind: IncomeKind) {
+    pub fn set_kind(&mut self, kind: IncomeKind, adjustment_available: bool) {
         if self.kind == kind {
             return;
         }
+        let previous_kind = self.kind;
         self.kind = kind;
         self.included_in_pension_salary_basis =
             matches!(kind, IncomeKind::AnnualSalary | IncomeKind::MonthlySalary);
@@ -301,6 +302,22 @@ impl IncomeEntry {
         if !matches!(kind, IncomeKind::AnnualSalary | IncomeKind::MonthlySalary) {
             self.use_full_year_projection_as_adjustment_basis = false;
         }
+        if kind.is_dividend() {
+            self.adjustment_applies = false;
+        } else if previous_kind.is_dividend() && self.payer_role == PayerRole::Main {
+            self.adjustment_applies = adjustment_available;
+        }
+    }
+
+    /// Changes the payer role and applies the plan's default jämkning choice.
+    /// The user can still override `adjustment_applies` after changing the role.
+    pub fn set_payer_role(&mut self, payer_role: PayerRole, adjustment_available: bool) {
+        if self.payer_role == payer_role {
+            return;
+        }
+        self.payer_role = payer_role;
+        self.adjustment_applies =
+            adjustment_available && payer_role == PayerRole::Main && !self.kind.is_dividend();
     }
 
     pub fn annual_amount(&self) -> u32 {
@@ -575,8 +592,23 @@ impl IncomePlan {
     pub fn add_entry(&mut self, kind: IncomeKind) -> u64 {
         let id = self.next_id;
         self.next_id = self.next_id.saturating_add(1);
-        self.entries.push(IncomeEntry::new(id, kind));
+        let mut entry = IncomeEntry::new(id, kind);
+        entry.adjustment_applies = self.adjustment_percent.is_some() && !kind.is_dividend();
+        self.entries.push(entry);
         id
+    }
+
+    /// Enables or disables a percentage jämkning decision. When enabled for
+    /// the first time, non-dividend main payers use it by default.
+    pub fn set_adjustment_enabled(&mut self, enabled: bool) {
+        if enabled == self.adjustment_percent.is_some() {
+            return;
+        }
+        self.adjustment_percent = enabled.then_some(30);
+        for entry in &mut self.entries {
+            entry.adjustment_applies =
+                enabled && entry.payer_role == PayerRole::Main && !entry.kind.is_dividend();
+        }
     }
 
     pub fn remove_entry(&mut self, id: u64) {
@@ -1299,6 +1331,69 @@ mod tests {
         assert_eq!(plan.entries[0], existing);
         assert_eq!(plan.entries.len(), 2);
         assert_ne!(plan.entries[0].id, plan.entries[1].id);
+    }
+
+    #[test]
+    fn enabling_adjustment_defaults_to_non_dividend_main_payers() {
+        let mut plan = IncomePlan::with_annual_salary(930_000);
+        let secondary_id = plan.add_entry(IncomeKind::AnnualOccupationalPension);
+        plan.entries
+            .iter_mut()
+            .find(|entry| entry.id == secondary_id)
+            .unwrap()
+            .payer_role = PayerRole::Secondary;
+        let dividend_id = plan.add_entry(IncomeKind::OwnCompanyDividend);
+
+        plan.set_adjustment_enabled(true);
+
+        assert_eq!(plan.adjustment_percent, Some(30));
+        assert!(plan.entries[0].adjustment_applies);
+        assert!(
+            !plan
+                .entries
+                .iter()
+                .find(|entry| entry.id == secondary_id)
+                .unwrap()
+                .adjustment_applies
+        );
+        assert!(
+            !plan
+                .entries
+                .iter()
+                .find(|entry| entry.id == dividend_id)
+                .unwrap()
+                .adjustment_applies
+        );
+    }
+
+    #[test]
+    fn new_main_payers_default_to_adjustment_when_a_decision_is_enabled() {
+        let mut plan = IncomePlan::with_annual_salary(930_000);
+        plan.set_adjustment_enabled(true);
+
+        let pension_id = plan.add_entry(IncomeKind::AnnualOccupationalPension);
+        let pension = plan
+            .entries
+            .iter_mut()
+            .find(|entry| entry.id == pension_id)
+            .unwrap();
+        assert!(pension.adjustment_applies);
+
+        pension.set_payer_role(PayerRole::Secondary, true);
+        assert!(!pension.adjustment_applies);
+        pension.set_payer_role(PayerRole::Main, true);
+        assert!(pension.adjustment_applies);
+    }
+
+    #[test]
+    fn payer_can_override_the_main_payer_adjustment_default() {
+        let mut plan = IncomePlan::with_annual_salary(930_000);
+        plan.set_adjustment_enabled(true);
+        plan.entries[0].adjustment_applies = false;
+
+        plan.entries[0].set_payer_role(PayerRole::Main, true);
+
+        assert!(!plan.entries[0].adjustment_applies);
     }
 
     #[test]

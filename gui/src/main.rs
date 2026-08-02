@@ -680,7 +680,7 @@ fn adjustment_editor(ui: &mut egui::Ui, plan: &mut IncomePlan, table: u8, age_gr
                         .checkbox(&mut enabled, "Use a percentage jämkning decision")
                         .changed()
                     {
-                        plan.adjustment_percent = enabled.then_some(30);
+                        plan.set_adjustment_enabled(enabled);
                     }
                 });
                 if let Some(percent) = &mut plan.adjustment_percent {
@@ -1220,7 +1220,7 @@ fn income_entry_editor(
                     for kind in IncomeKind::ALL {
                         ui.selectable_value(&mut selected_kind, kind, kind.label());
                     }
-                    entry.set_kind(selected_kind);
+                    entry.set_kind(selected_kind, adjustment.is_some());
                 });
 
             if entry.kind.is_monthly() {
@@ -1287,24 +1287,26 @@ fn income_entry_editor(
                 )));
             } else {
                 ui.label(secondary_label("Payer"));
+                let mut payer_role = entry.payer_role;
                 egui::ComboBox::from_id_salt(("payer-role", entry.id))
-                    .selected_text(match entry.payer_role {
+                    .selected_text(match payer_role {
                         PayerRole::Main => "Main payer",
                         PayerRole::Secondary => "Secondary payer",
                     })
                     .width(ui.available_width())
                     .show_ui(ui, |ui| {
                         ui.selectable_value(
-                            &mut entry.payer_role,
+                            &mut payer_role,
                             PayerRole::Main,
                             "Main payer — table",
                         );
                         ui.selectable_value(
-                            &mut entry.payer_role,
+                            &mut payer_role,
                             PayerRole::Secondary,
                             format!("Secondary payer — {SECONDARY_WITHHOLDING_PERCENT}%"),
                         );
                     });
+                entry.set_payer_role(payer_role, adjustment.is_some());
                 if adjustment.is_some() {
                     ui.checkbox(
                         &mut entry.adjustment_applies,
