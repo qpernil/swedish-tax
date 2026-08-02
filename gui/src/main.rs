@@ -618,6 +618,7 @@ fn adjustment_editor(ui: &mut egui::Ui, plan: &mut IncomePlan, table: u8, age_gr
                     !entry.kind.is_dividend()
                         && entry.adjustment_applies
                         && entry.custom_withholding_percent.is_none()
+                        && entry.actual_withholding.is_none()
                 })
                 .count();
             let overridden_count = plan
@@ -626,7 +627,8 @@ fn adjustment_editor(ui: &mut egui::Ui, plan: &mut IncomePlan, table: u8, age_gr
                 .filter(|entry| {
                     !entry.kind.is_dividend()
                         && entry.adjustment_applies
-                        && entry.custom_withholding_percent.is_some()
+                        && (entry.custom_withholding_percent.is_some()
+                            || entry.actual_withholding.is_some())
                 })
                 .count();
             ui.horizontal(|ui| {
@@ -1275,7 +1277,7 @@ fn income_entry_editor(
             ui.add_space(8.0);
             if entry.kind.is_dividend() {
                 ui.label(eligibility_badge(&format!(
-                    "{DIVIDEND_TAX_PERCENT}% final tax within gränsbelopp · 0% withheld · no PGI · no SGI"
+                    "{DIVIDEND_TAX_PERCENT}% final tax within gränsbelopp · 0 SEK default withholding · no PGI · no SGI"
                 )));
             } else {
                 ui.label(secondary_label("Payer"));
@@ -1318,11 +1320,37 @@ fn income_entry_editor(
                 ui.label(eligibility_badge(income_eligibility(entry.kind)));
             }
 
+            ui.add_space(8.0);
+            let mut use_actual = entry.actual_withholding.is_some();
+            if ui
+                .checkbox(&mut use_actual, "Enter actual tax withheld")
+                .changed()
+            {
+                entry.set_actual_withholding_enabled(use_actual);
+            }
+            if let Some(actual) = &mut entry.actual_withholding {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(secondary_label("Actual withheld for this income row"));
+                    ui.add(
+                        egui::DragValue::new(actual)
+                            .range(0..=MAX_INCOME)
+                            .suffix(" SEK")
+                            .speed(100.0),
+                    );
+                });
+                ui.label(
+                    egui::RichText::new(
+                        "This amount overrides table, jämkning, custom percentage, and the normal dividend assumption.",
+                    )
+                    .small()
+                    .color(secondary_text()),
+                );
+            }
             if let Some(withholding) = withholding {
                 ui.add_space(6.0);
                 ui.label(
                     egui::RichText::new(format!(
-                        "Calculated withholding: {} · {}",
+                        "Withholding used: {} · {}",
                         format_sek(withholding.withheld),
                         withholding_rule_text(withholding.rule),
                     ))
@@ -1883,6 +1911,7 @@ fn eligibility_badge(text: &str) -> egui::RichText {
 
 fn withholding_rule_text(rule: AppliedWithholding) -> String {
     match rule {
+        AppliedWithholding::ActualAmount => "entered actual amount".to_owned(),
         AppliedWithholding::Table(column) => format!("table column {}", column as u8),
         AppliedWithholding::TableAndOneTime(column, percent) => format!(
             "table column {} plus one-time-payment table at {percent}%",
@@ -2526,6 +2555,9 @@ fn withholding_equation(
     annual_work_income: u32,
 ) -> String {
     match estimate.rule {
+        AppliedWithholding::ActualAmount => {
+            "Actual tax withheld entered for this income row".to_owned()
+        }
         AppliedWithholding::Table(column) if entry.kind.is_monthly() => format!(
             "Table {table}, column {}, summed for each paid month",
             column as u8

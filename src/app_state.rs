@@ -49,6 +49,7 @@ mod tests {
         plan.adjustment_percent = Some(33);
         plan.entries[0].end = Date2026::new(10, 18);
         plan.entries[0].adjustment_applies = true;
+        plan.entries[0].actual_withholding = Some(271_234);
         let pension_id = plan.add_entry(IncomeKind::MonthlyOccupationalPension);
         plan.entries
             .iter_mut()
@@ -73,5 +74,16 @@ mod tests {
         state = PersistedAppState::default();
         state.table = MIN_TAX_TABLE - 1;
         assert!(!state.is_supported());
+    }
+
+    #[test]
+    fn state_saved_before_actual_withholding_was_added_still_loads() {
+        let encoded = ron::to_string(&PersistedAppState::default()).unwrap();
+        let legacy = encoded.replace("actual_withholding:None,", "");
+        assert_ne!(legacy, encoded);
+
+        let restored: PersistedAppState = ron::from_str(&legacy).unwrap();
+
+        assert_eq!(restored.income_plan.entries[0].actual_withholding, None);
     }
 }

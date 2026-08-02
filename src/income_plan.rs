@@ -243,6 +243,10 @@ pub struct IncomeEntry {
     /// behind a percentage jämkning decision.
     pub use_full_year_projection_as_adjustment_basis: bool,
     pub custom_withholding_percent: Option<u32>,
+    /// Total tax actually withheld for this income row. When present, this
+    /// takes precedence over every estimated withholding rule.
+    #[serde(default)]
+    pub actual_withholding: Option<u32>,
     pub vacation_compensation: Option<VacationCompensation>,
     pub regular_pension_premium: Option<RegularPensionPremium>,
     pub salary_exchange: Option<SalaryExchange>,
@@ -267,6 +271,7 @@ impl IncomeEntry {
             adjustment_applies: false,
             use_full_year_projection_as_adjustment_basis: false,
             custom_withholding_percent: None,
+            actual_withholding: None,
             vacation_compensation: None,
             regular_pension_premium,
             salary_exchange: None,
@@ -325,6 +330,13 @@ impl IncomeEntry {
             return;
         }
         self.custom_withholding_percent = enabled.then_some(30);
+    }
+
+    pub fn set_actual_withholding_enabled(&mut self, enabled: bool) {
+        if enabled == self.actual_withholding.is_some() {
+            return;
+        }
+        self.actual_withholding = enabled.then_some(0);
     }
 
     pub fn annual_amount(&self) -> u32 {
@@ -663,6 +675,7 @@ impl IncomePlan {
         if entry.payer_role != PayerRole::Main
             || entry.adjustment_applies
             || entry.custom_withholding_percent.is_some()
+            || entry.actual_withholding.is_some()
             || entry.vacation_compensation_amount() > 0
         {
             return false;
@@ -771,6 +784,9 @@ impl IncomePlan {
         table: u8,
         age_group: TaxAgeGroup,
     ) -> (u32, u32, u32, AppliedWithholding) {
+        if let Some(withheld) = entry.actual_withholding {
+            return (withheld, withheld, 0, AppliedWithholding::ActualAmount);
+        }
         if entry.kind.is_dividend() {
             return (0, 0, 0, AppliedWithholding::None);
         }
@@ -985,6 +1001,7 @@ impl SalaryExchangeContext {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AppliedWithholding {
+    ActualAmount,
     Table(TaxColumn),
     TableAndOneTime(TaxColumn, u32),
     OneTimeTable(u32),
@@ -1415,6 +1432,17 @@ mod tests {
     }
 
     #[test]
+    fn actual_withholding_editor_default_comes_from_the_income_entry() {
+        let mut entry = IncomeEntry::new(1, IncomeKind::AnnualSalary);
+
+        entry.set_actual_withholding_enabled(true);
+        assert_eq!(entry.actual_withholding, Some(0));
+
+        entry.set_actual_withholding_enabled(false);
+        assert_eq!(entry.actual_withholding, None);
+    }
+
+    #[test]
     fn monthly_salary_plan_defaults_to_the_full_calendar_year() {
         let plan = IncomePlan::with_monthly_salary(55_033);
         let totals = plan.totals();
@@ -1538,6 +1566,37 @@ mod tests {
     }
 
     #[test]
+    fn actual_withholding_overrides_estimates_for_every_income_kind() {
+        let mut plan = IncomePlan::with_annual_salary(0);
+        plan.entries.clear();
+        let mut expected_total = 0_u32;
+
+        for (index, kind) in IncomeKind::ALL.into_iter().enumerate() {
+            let id = plan.add_entry(kind);
+            let entry = plan
+                .entries
+                .iter_mut()
+                .find(|entry| entry.id == id)
+                .unwrap();
+            entry.amount = 100_000;
+            entry.adjustment_applies = true;
+            entry.custom_withholding_percent = Some(42);
+            let actual = (index as u32 + 1) * 1_000;
+            entry.actual_withholding = Some(actual);
+            expected_total = expected_total.saturating_add(actual);
+        }
+        plan.adjustment_percent = Some(38);
+
+        let summary = plan.estimated_withholding(32, TaxAgeGroup::Under66AtYearStart);
+
+        assert_eq!(summary.total, expected_total);
+        assert!(summary.entries.iter().enumerate().all(|(index, entry)| {
+            entry.rule == AppliedWithholding::ActualAmount
+                && entry.withheld == (index as u32 + 1) * 1_000
+        }));
+    }
+
+    #[test]
     fn main_payer_one_time_salary_uses_the_engang_table() {
         let mut plan = IncomePlan::with_annual_salary(700_000);
         let id = plan.add_entry(IncomeKind::OneTimeSalary);
@@ -1566,5 +1625,10 @@ mod tests {
         let summary = plan.estimated_withholding(32, TaxAgeGroup::Under66AtYearStart);
         assert_eq!(summary.total, 0);
         assert_eq!(summary.entries[0].rule, AppliedWithholding::None);
+
+        plan.entries[0].actual_withholding = Some(25_000);
+        let summary = plan.estimated_withholding(32, TaxAgeGroup::Under66AtYearStart);
+        assert_eq!(summary.total, 25_000);
+        assert_eq!(summary.entries[0].rule, AppliedWithholding::ActualAmount);
     }
 }
