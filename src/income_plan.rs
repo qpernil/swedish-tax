@@ -3,7 +3,9 @@ use crate::{
     TaxDeduction,
 };
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(
+    Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, serde::Deserialize, serde::Serialize,
+)]
 pub struct Date2026 {
     pub month: u8,
     pub day: u8,
@@ -36,7 +38,7 @@ impl Date2026 {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub enum IncomeKind {
     AnnualSalary,
     MonthlySalary,
@@ -111,7 +113,7 @@ impl IncomeKind {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub enum PayerRole {
     Main,
     Secondary,
@@ -127,7 +129,7 @@ pub const EMPLOYER_PENSION_ALLOWANCE_MAXIMUM: u32 = 592_000;
 pub const DEFAULT_SALARY_EXCHANGE_UPLIFT_BASIS_POINTS: u32 = 576;
 pub const SECONDARY_WITHHOLDING_PERCENT: u32 = 30;
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct RegularPensionPremium {
     /// Actual monthly premium, when it differs from the benchmark calculation.
     pub monthly_override: Option<u32>,
@@ -151,7 +153,7 @@ impl RegularPensionPremium {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct SalaryExchange {
     /// Gross one-time salary forgone by the employee.
     pub sacrificed_salary: u32,
@@ -226,7 +228,7 @@ impl Default for SalaryExchange {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct IncomeEntry {
     pub id: u64,
     pub description: String,
@@ -480,7 +482,7 @@ impl IncomeEntry {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct VacationCompensation {
     pub annual_entitlement_days: u32,
     pub payout_days: u32,
@@ -534,11 +536,17 @@ impl VacationCompensation {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct IncomePlan {
     pub entries: Vec<IncomeEntry>,
     pub adjustment_percent: Option<u32>,
     next_id: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum IncomePlanValidationIssue {
+    InvalidPaymentPeriod { entry_id: u64 },
+    SalaryExchangeExceedsAllowance { entry_id: u64, maximum: u32 },
 }
 
 impl IncomePlan {
@@ -578,8 +586,33 @@ impl IncomePlan {
         }
     }
 
+    pub fn validation_issue(&self) -> Option<IncomePlanValidationIssue> {
+        for entry in &self.entries {
+            if !entry.is_valid() {
+                return Some(IncomePlanValidationIssue::InvalidPaymentPeriod {
+                    entry_id: entry.id,
+                });
+            }
+        }
+        for entry in &self.entries {
+            let Some(exchange) = entry.salary_exchange else {
+                continue;
+            };
+            let Some(allowance) = self.salary_exchange_allowance(entry.id) else {
+                continue;
+            };
+            if exchange.sacrificed_salary > allowance.maximum_sacrifice {
+                return Some(IncomePlanValidationIssue::SalaryExchangeExceedsAllowance {
+                    entry_id: entry.id,
+                    maximum: allowance.maximum_sacrifice,
+                });
+            }
+        }
+        None
+    }
+
     pub fn is_valid(&self) -> bool {
-        self.entries.iter().all(IncomeEntry::is_valid)
+        self.validation_issue().is_none()
     }
 
     /// Whether the plan can be represented by the GUI's simple monthly table
@@ -935,6 +968,7 @@ fn basis_points_rounded(amount: u32, basis_points: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Calculation;
 
     #[test]
     fn exact_date_monthly_income_prorates_partial_months() {
@@ -1033,6 +1067,53 @@ mod tests {
         assert_eq!(totals.salary_exchange_sacrifice, 168_012);
         assert_eq!(totals.salary_exchange_pension_contributions, 177_689);
         assert_eq!(totals.total_employer_pension_contributions(), 352_408);
+    }
+
+    #[test]
+    fn increased_pension_contributions_invalidate_an_excessive_salary_exchange() {
+        let mut plan = IncomePlan::with_annual_salary(1_000_000);
+        let lump_id = plan.add_entry(IncomeKind::OneTimeSalary);
+        let lump = plan
+            .entries
+            .iter_mut()
+            .find(|entry| entry.id == lump_id)
+            .unwrap();
+        lump.amount = 300_000;
+        lump.salary_exchange = Some(SalaryExchange::new());
+
+        let original_maximum = plan
+            .salary_exchange_allowance(lump_id)
+            .unwrap()
+            .maximum_sacrifice;
+        assert!(original_maximum > 0);
+        plan.entries
+            .iter_mut()
+            .find(|entry| entry.id == lump_id)
+            .unwrap()
+            .salary_exchange
+            .as_mut()
+            .unwrap()
+            .sacrificed_salary = original_maximum;
+        assert_eq!(plan.validation_issue(), None);
+
+        plan.entries[0]
+            .regular_pension_premium
+            .as_mut()
+            .unwrap()
+            .monthly_override = Some(25_000);
+        let reduced_maximum = plan
+            .salary_exchange_allowance(lump_id)
+            .unwrap()
+            .maximum_sacrifice;
+        assert!(reduced_maximum < original_maximum);
+        assert_eq!(
+            plan.validation_issue(),
+            Some(IncomePlanValidationIssue::SalaryExchangeExceedsAllowance {
+                entry_id: lump_id,
+                maximum: reduced_maximum,
+            })
+        );
+        assert!(Calculation::new(32, TaxAgeGroup::Under66AtYearStart, &plan).is_none());
     }
 
     #[test]

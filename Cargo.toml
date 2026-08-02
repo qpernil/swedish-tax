@@ -8,6 +8,10 @@ description = "Swedish preliminary tax calculations for income year 2026"
 name = "swedish_tax"
 
 [dependencies]
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+ron = "0.12"
 
 [workspace]
 members = ["gui"]

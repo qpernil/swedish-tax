@@ -9,6 +9,20 @@ use crate::{
 pub const DEFAULT_MONTHLY_INCOME: u32 = 660_400 / 12;
 pub const DIVIDEND_TAX_PERCENT: u32 = 20;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TaxBalance {
+    Debt(u32),
+    Refund(u32),
+    Settled,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AdjustmentBalanceTrace {
+    pub formula_tax_change: i64,
+    pub withholding_change: i64,
+    pub ordinary_balance: i64,
+}
+
 /// How a percentage jämkning decision changes the projected ordinary tax.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AdjustmentCalibration {
@@ -156,6 +170,29 @@ impl Calculation {
     pub fn tax_balance(self) -> i64 {
         i64::from(self.total_tax) - i64::from(self.withheld_tax)
     }
+
+    pub fn tax_balance_outcome(self) -> TaxBalance {
+        match self.tax_balance().cmp(&0) {
+            std::cmp::Ordering::Greater => TaxBalance::Debt(self.tax_balance() as u32),
+            std::cmp::Ordering::Less => {
+                TaxBalance::Refund(self.tax_balance().unsigned_abs() as u32)
+            }
+            std::cmp::Ordering::Equal => TaxBalance::Settled,
+        }
+    }
+
+    pub fn adjustment_balance_trace(self) -> Option<AdjustmentBalanceTrace> {
+        let calibration = self.adjustment_calibration?;
+        let formula_tax_change =
+            i64::from(self.annual_tax.total) - i64::from(calibration.formula_tax_at_basis);
+        let withholding_change =
+            i64::from(self.withheld_tax) - i64::from(calibration.assumed_tax_at_basis);
+        Some(AdjustmentBalanceTrace {
+            formula_tax_change,
+            withholding_change,
+            ordinary_balance: formula_tax_change - withholding_change,
+        })
+    }
 }
 
 fn percentage(amount: u32, percent: u32) -> u32 {
@@ -186,6 +223,32 @@ mod tests {
         assert_eq!(calculation.ordinary_final_tax, 251_280);
         assert_eq!(calculation.withheld_tax, 294_030);
         assert_eq!(calculation.tax_balance(), -42_750);
+        assert_eq!(
+            calculation.adjustment_balance_trace(),
+            Some(AdjustmentBalanceTrace {
+                formula_tax_change: -117_000,
+                withholding_change: -74_250,
+                ordinary_balance: -42_750,
+            })
+        );
+    }
+
+    #[test]
+    fn full_year_adjustment_basis_is_a_zero_balance_anchor() {
+        let mut plan = IncomePlan::with_monthly_salary(93_000);
+        plan.adjustment_percent = Some(33);
+        plan.entries[0].adjustment_applies = true;
+        plan.entries[0].use_full_year_projection_as_adjustment_basis = true;
+
+        let calculation = Calculation::new(32, TaxAgeGroup::Under66AtYearStart, &plan).unwrap();
+        let calibration = calculation.adjustment_calibration.unwrap();
+        assert_eq!(calculation.annual_income, calibration.basis_income);
+        assert_eq!(
+            calculation.ordinary_final_tax,
+            calibration.assumed_tax_at_basis
+        );
+        assert_eq!(calculation.withheld_tax, calibration.assumed_tax_at_basis);
+        assert_eq!(calculation.tax_balance_outcome(), TaxBalance::Settled);
     }
 
     #[test]

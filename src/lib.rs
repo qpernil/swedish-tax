@@ -15,13 +15,16 @@
 //! rows are returned as percentages so callers can apply the required
 //! rounding policy explicitly.
 
+mod app_state;
 mod calculation;
 mod income_bases;
 mod income_plan;
 mod withholding;
 
+pub use app_state::{PersistedAppState, PERSISTED_APP_STATE_VERSION};
 pub use calculation::{
-    AdjustmentCalibration, Calculation, DEFAULT_MONTHLY_INCOME, DIVIDEND_TAX_PERCENT,
+    AdjustmentBalanceTrace, AdjustmentCalibration, Calculation, TaxBalance, DEFAULT_MONTHLY_INCOME,
+    DIVIDEND_TAX_PERCENT,
 };
 
 pub use income_bases::{
@@ -32,12 +35,12 @@ pub use income_bases::{
 };
 pub use income_plan::{
     AppliedWithholding, Date2026, EntryWithholding, IncomeEntry, IncomeKind, IncomePlan,
-    IncomePlanTotals, IncomeTaxCategory, PayerRole, RegularPensionPremium, SalaryExchange,
-    SalaryExchangeAllowance, SalaryExchangeContext, VacationCompensation, WithholdingSummary,
-    DEFAULT_SALARY_EXCHANGE_UPLIFT_BASIS_POINTS, EMPLOYER_PENSION_ALLOWANCE_MAXIMUM,
-    EMPLOYER_PENSION_ALLOWANCE_RATE_BASIS_POINTS, REGULAR_PENSION_LOWER_RATE_BASIS_POINTS,
-    REGULAR_PENSION_MONTHLY_THRESHOLD, REGULAR_PENSION_UPPER_RATE_BASIS_POINTS,
-    SECONDARY_WITHHOLDING_PERCENT,
+    IncomePlanTotals, IncomePlanValidationIssue, IncomeTaxCategory, PayerRole,
+    RegularPensionPremium, SalaryExchange, SalaryExchangeAllowance, SalaryExchangeContext,
+    VacationCompensation, WithholdingSummary, DEFAULT_SALARY_EXCHANGE_UPLIFT_BASIS_POINTS,
+    EMPLOYER_PENSION_ALLOWANCE_MAXIMUM, EMPLOYER_PENSION_ALLOWANCE_RATE_BASIS_POINTS,
+    REGULAR_PENSION_LOWER_RATE_BASIS_POINTS, REGULAR_PENSION_MONTHLY_THRESHOLD,
+    REGULAR_PENSION_UPPER_RATE_BASIS_POINTS, SECONDARY_WITHHOLDING_PERCENT,
 };
 pub use withholding::one_time_withholding_rate;
 
@@ -65,7 +68,7 @@ pub enum TaxDeduction {
 }
 
 /// Age category used by the 2026 earned-income and basic-allowance rules.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub enum TaxAgeGroup {
     Under66AtYearStart,
     AtLeast66AtYearStart,

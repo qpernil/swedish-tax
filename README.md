@@ -31,6 +31,10 @@ contribution amounts remain editable for individually agreed pension terms.
 Recurring salary rows can also use their 12-month projection as the annual income
 basis behind a percentage jämkning decision. The annual result then shows the
 calibration explicitly while preserving the row's actual payment dates.
+The desktop app restores the selected table, age group, jämkning settings, and
+complete income plan between launches. If later pension changes make an existing
+salary exchange exceed its allowance, the plan is marked invalid and reports the
+new maximum instead of silently calculating from inconsistent inputs.
 
 ```sh
 cargo run -p swedish-tax-gui

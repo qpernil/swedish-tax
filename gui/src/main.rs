@@ -2,12 +2,14 @@ use eframe::egui;
 use swedish_tax::{
     AdjustmentCalibration, AnnualTax, AppliedWithholding, Calculation, DEFAULT_MONTHLY_INCOME,
     DIVIDEND_TAX_PERCENT, Date2026, EntryWithholding, IncomeBasisEstimate, IncomeEntry, IncomeKind,
-    IncomePlan, IncomeTaxCategory, MAX_TAX_TABLE, MIN_TAX_TABLE, PayerRole, RegularPensionPremium,
-    SECONDARY_WITHHOLDING_PERCENT, SalaryExchange, SalaryExchangeContext, TaxAgeGroup, TaxColumn,
-    TaxDeduction, VacationCompensation, WithholdingSummary,
+    IncomePlan, IncomePlanValidationIssue, IncomeTaxCategory, MAX_TAX_TABLE, MIN_TAX_TABLE,
+    PayerRole, PersistedAppState, RegularPensionPremium, SECONDARY_WITHHOLDING_PERCENT,
+    SalaryExchange, SalaryExchangeContext, TaxAgeGroup, TaxBalance, TaxColumn, TaxDeduction,
+    VacationCompensation, WithholdingSummary,
 };
 
 const MAX_INCOME: u32 = 100_000_000;
+const APP_STATE_STORAGE_KEY: &str = "swedish-tax-app-state";
 type HoverHelp = fn(&mut egui::Ui);
 type Summary<'a> = (
     &'a str,
@@ -43,7 +45,29 @@ impl Default for TaxApp {
 impl TaxApp {
     fn new(context: &eframe::CreationContext<'_>) -> Self {
         configure_style(&context.egui_ctx);
-        Self::default()
+        context
+            .storage
+            .and_then(|storage| {
+                eframe::get_value::<PersistedAppState>(storage, APP_STATE_STORAGE_KEY)
+            })
+            .filter(PersistedAppState::is_supported)
+            .map(Self::from_persisted_state)
+            .unwrap_or_default()
+    }
+
+    fn from_persisted_state(state: PersistedAppState) -> Self {
+        Self {
+            table: state.table,
+            age_group: state.age_group,
+            selected_income_entry: state.income_plan.entries.first().map(|entry| entry.id),
+            income_plan: state.income_plan,
+            income_editor_open: false,
+            calculation_trace_open: false,
+        }
+    }
+
+    fn persisted_state(&self) -> PersistedAppState {
+        PersistedAppState::new(self.table, self.age_group, self.income_plan.clone())
     }
 
     fn add_income_for_editing(&mut self) -> u64 {
@@ -182,7 +206,7 @@ impl TaxApp {
             (
                 "Annual net after final tax",
                 format_sek(calculation.annual_net()),
-                Some(tax_balance_summary(calculation.tax_balance())),
+                Some(tax_balance_summary(calculation.tax_balance_outcome())),
                 primary_text(),
                 None,
             ),
@@ -912,7 +936,9 @@ fn income_totals_footer(ui: &mut egui::Ui, plan: &IncomePlan, table: u8, age_gro
                     &mut columns[3],
                     "Projected balance",
                     calculation
-                        .map(|calculation| tax_balance_summary(calculation.tax_balance()))
+                        .map(|calculation| {
+                            tax_balance_summary(calculation.tax_balance_outcome())
+                        })
                         .unwrap_or_else(|| "—".to_owned()),
                 );
             });
@@ -1709,7 +1735,7 @@ impl eframe::App for TaxApp {
                         ui.add_space(20.0);
                         ui.colored_label(
                             egui::Color32::DARK_RED,
-                            "Complete or correct the dated income rows to show results.",
+                            validation_message(self.income_plan.validation_issue()),
                         );
                     }
 
@@ -1727,6 +1753,27 @@ impl eframe::App for TaxApp {
             });
 
         self.income_editor(ui.ctx());
+    }
+
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        eframe::set_value(storage, APP_STATE_STORAGE_KEY, &self.persisted_state());
+    }
+
+    fn auto_save_interval(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(500)
+    }
+}
+
+fn validation_message(issue: Option<IncomePlanValidationIssue>) -> String {
+    match issue {
+        Some(IncomePlanValidationIssue::InvalidPaymentPeriod { .. }) => {
+            "Check that each payment period ends after it starts.".to_owned()
+        }
+        Some(IncomePlanValidationIssue::SalaryExchangeExceedsAllowance { maximum, .. }) => format!(
+            "Salary exchange exceeds the current maximum of {}. Open the income row and reduce it.",
+            format_sek(maximum)
+        ),
+        None => "Check the income-plan values and try again.".to_owned(),
     }
 }
 
@@ -1911,18 +1958,11 @@ fn annual_reconciliation(ui: &mut egui::Ui, calculation: Calculation) {
                 },
                 format_sek(calculation.total_tax),
             );
-            let balance = calculation.tax_balance();
-            if balance > 0 {
-                value_row(ui, "Expected kvarskatt", format_sek(balance as u32));
-            } else if balance < 0 {
-                value_row(
-                    ui,
-                    "Expected refund",
-                    format_sek(balance.unsigned_abs() as u32),
-                );
-            } else {
-                value_row(ui, "Expected balance", format_sek(0));
-            }
+            value_row(
+                ui,
+                "Expected balance",
+                tax_balance_value(calculation.tax_balance_outcome()),
+            );
         });
 }
 
@@ -2051,33 +2091,56 @@ fn calculation_trace(
 
             ui.add_space(10.0);
             trace_heading(ui, "4", "Reconciliation");
-            let balance = calculation.tax_balance();
-            let (label, equation, result) = match balance.cmp(&0) {
-                std::cmp::Ordering::Greater => (
-                    "Expected kvarskatt",
+            if let Some(trace) = calculation.adjustment_balance_trace() {
+                ui.label(
+                    egui::RichText::new(
+                        "The full-year jämkning projection is the zero-balance anchor. The expected balance shows how formula tax and withholding changed from that projection.",
+                    )
+                    .small()
+                    .color(secondary_text()),
+                );
+                trace_line(
+                    ui,
+                    "Formula-tax change from projection",
+                    "Actual-period formula tax − formula tax at the full-year basis",
+                    format_delta_sek(trace.formula_tax_change),
+                );
+                trace_line(
+                    ui,
+                    "Withholding change from projection",
+                    "Actual withholding − assumed withholding at the full-year basis",
+                    format_delta_sek(trace.withholding_change),
+                );
+                trace_line(
+                    ui,
+                    "Formula change minus withholding change",
+                    "Ordinary expected balance before dividend tax",
+                    format_delta_sek(trace.ordinary_balance),
+                );
+            }
+            let (equation, result) = match calculation.tax_balance_outcome() {
+                TaxBalance::Debt(amount) => (
                     format!(
                         "{} final tax − {} withheld",
                         format_sek(calculation.total_tax),
                         format_sek(calculation.withheld_tax),
                     ),
-                    format_sek(balance as u32),
+                    tax_balance_value(TaxBalance::Debt(amount)),
                 ),
-                std::cmp::Ordering::Less => (
-                    "Expected refund",
+                TaxBalance::Refund(amount) => (
                     format!(
                         "{} withheld − {} final tax",
                         format_sek(calculation.withheld_tax),
                         format_sek(calculation.total_tax),
                     ),
-                    format_sek(balance.unsigned_abs() as u32),
+                    tax_balance_value(TaxBalance::Refund(amount)),
                 ),
-                std::cmp::Ordering::Equal => (
-                    "Expected balance",
+                TaxBalance::Settled => (
                     "Final tax equals tax withheld".to_owned(),
-                    format_sek(0),
+                    tax_balance_value(TaxBalance::Settled),
                 ),
             };
-            trace_line(ui, label, equation, result);
+            trace_line(ui, "Expected balance", equation, result);
         });
 }
 
@@ -2192,6 +2255,14 @@ fn format_signed_sek(value: i64) -> String {
         format!("−{}", format_sek(value.unsigned_abs() as u32))
     } else {
         format_sek(value as u32)
+    }
+}
+
+fn format_delta_sek(value: i64) -> String {
+    if value > 0 {
+        format!("+{}", format_sek(value as u32))
+    } else {
+        format_signed_sek(value)
     }
 }
 
@@ -2454,16 +2525,27 @@ fn table_deduction_text(deduction: TaxDeduction) -> String {
     }
 }
 
-fn tax_balance_summary(balance: i64) -> String {
-    match balance.cmp(&0) {
-        std::cmp::Ordering::Greater => {
-            format!("Expected kvarskatt: {}", format_sek(balance as u32))
-        }
-        std::cmp::Ordering::Less => format!(
-            "Expected refund: {}",
-            format_sek(balance.unsigned_abs() as u32)
+fn tax_balance_summary(balance: TaxBalance) -> String {
+    match balance {
+        TaxBalance::Debt(_) => format!(
+            "Expected balance: {} · Tax debt",
+            tax_balance_value(balance)
         ),
-        std::cmp::Ordering::Equal => "Withholding matches final tax".to_owned(),
+        TaxBalance::Refund(_) => {
+            format!(
+                "Expected balance: {} · Tax refund",
+                tax_balance_value(balance)
+            )
+        }
+        TaxBalance::Settled => "No expected balance · Settled".to_owned(),
+    }
+}
+
+fn tax_balance_value(balance: TaxBalance) -> String {
+    match balance {
+        TaxBalance::Debt(amount) => format!("−{}", format_sek(amount)),
+        TaxBalance::Refund(amount) => format!("+{}", format_sek(amount)),
+        TaxBalance::Settled => format_sek(0),
     }
 }
 
@@ -2564,6 +2646,28 @@ mod tests {
     }
 
     #[test]
+    fn persisted_state_restores_the_complete_plan_and_settings() {
+        let mut plan = IncomePlan::with_monthly_salary(93_000);
+        plan.adjustment_percent = Some(33);
+        let pension_id = plan.add_entry(IncomeKind::MonthlyOccupationalPension);
+        plan.entries
+            .iter_mut()
+            .find(|entry| entry.id == pension_id)
+            .unwrap()
+            .amount = 27_500;
+        let app = TaxApp::from_persisted_state(PersistedAppState::new(
+            34,
+            TaxAgeGroup::AtLeast66AtYearStart,
+            plan.clone(),
+        ));
+
+        assert_eq!(app.table, 34);
+        assert_eq!(app.age_group, TaxAgeGroup::AtLeast66AtYearStart);
+        assert_eq!(app.income_plan, plan);
+        assert_eq!(app.persisted_state().income_plan, plan);
+    }
+
+    #[test]
     fn monthly_table_reference_requires_one_uniform_full_year_salary() {
         let mut plan = IncomePlan::with_monthly_salary(93_000);
         assert!(plan.has_uniform_monthly_table_reference());
@@ -2582,7 +2686,13 @@ mod tests {
     fn formatting_groups_sek_without_locale_dependencies() {
         assert_eq!(format_sek(0), "0 SEK");
         assert_eq!(format_sek(1_234_567), "1 234 567 SEK");
-        assert_eq!(tax_balance_summary(2_400), "Expected kvarskatt: 2 400 SEK");
-        assert_eq!(tax_balance_summary(-350), "Expected refund: 350 SEK");
+        assert_eq!(
+            tax_balance_summary(TaxBalance::Debt(2_400)),
+            "Expected balance: −2 400 SEK · Tax debt"
+        );
+        assert_eq!(
+            tax_balance_summary(TaxBalance::Refund(350)),
+            "Expected balance: +350 SEK · Tax refund"
+        );
     }
 }
