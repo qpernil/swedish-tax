@@ -43,7 +43,10 @@ pub struct Calculation {
     pub monthly_income: u32,
     pub annual_income: u32,
     pub ordinary_income: u32,
+    pub work_income: u32,
+    pub pension_income: u32,
     pub dividend_income: u32,
+    pub sgi_annual_rate: u32,
     pub table_deduction: TaxDeduction,
     pub annual_tax: AnnualTax,
     pub adjustment_calibration: Option<AdjustmentCalibration>,
@@ -55,6 +58,7 @@ pub struct Calculation {
     pub vacation_pension_premiums: u32,
     pub salary_exchange_sacrifice: u32,
     pub salary_exchange_pension_contributions: u32,
+    pub pension_salary_basis: u32,
     pub employer_pension_contributions: u32,
     pub marginal_rate: f64,
     pub pension_progress: IncomeBasisEstimate,
@@ -116,7 +120,10 @@ impl Calculation {
             monthly_income,
             annual_income,
             ordinary_income,
+            work_income: totals.work_income,
+            pension_income: totals.pension_income,
             dividend_income: totals.dividend_income,
+            sgi_annual_rate: totals.sgi_annual_rate,
             table_deduction,
             annual_tax,
             adjustment_calibration,
@@ -128,6 +135,7 @@ impl Calculation {
             vacation_pension_premiums: totals.vacation_pension_premiums,
             salary_exchange_sacrifice: totals.salary_exchange_sacrifice,
             salary_exchange_pension_contributions: totals.salary_exchange_pension_contributions,
+            pension_salary_basis: totals.pension_salary_basis,
             employer_pension_contributions: totals.total_employer_pension_contributions(),
             marginal_rate,
             pension_progress: public_pension_progress_for_income(totals.work_income),
@@ -156,6 +164,15 @@ impl Calculation {
             0.0
         } else {
             f64::from(self.ordinary_final_tax) * 100.0 / f64::from(self.ordinary_income)
+        }
+    }
+
+    pub fn employer_pension_share_of_basis(self) -> f64 {
+        if self.pension_salary_basis == 0 {
+            0.0
+        } else {
+            f64::from(self.employer_pension_contributions) * 100.0
+                / f64::from(self.pension_salary_basis)
         }
     }
 
@@ -296,6 +313,11 @@ mod tests {
         assert_eq!(calculation.ordinary_income, 1_521_028);
         assert_eq!(calculation.monthly_income, 126_752);
         assert!(calculation.withheld_tax > 0);
+        assert_eq!(
+            calculation.employer_pension_share_of_basis(),
+            f64::from(calculation.employer_pension_contributions) * 100.0
+                / f64::from(calculation.pension_salary_basis)
+        );
         assert_eq!(
             calculation.pension_progress,
             public_pension_progress_for_income(1_383_528)

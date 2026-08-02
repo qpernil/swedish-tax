@@ -133,6 +133,23 @@ pub struct AnnualTax {
     pub total: u32,
 }
 
+impl AnnualTax {
+    pub const fn additions_total(self) -> u32 {
+        self.state_income_tax
+            .saturating_add(self.municipal_income_tax)
+            .saturating_add(self.burial_and_religious_fee)
+            .saturating_add(self.pension_fee)
+            .saturating_add(self.public_service_fee)
+    }
+
+    pub const fn credits_total(self) -> u32 {
+        self.pension_fee_credit
+            .saturating_add(self.work_income_credit)
+            .saturating_add(self.sickness_compensation_credit)
+            .saturating_add(self.earned_income_credit)
+    }
+}
+
 const PRICE_BASE_AMOUNT: u32 = 59_200;
 const STATE_TAX_THRESHOLD: u32 = 643_000;
 const BURIAL_AND_RELIGIOUS_RATE: u32 = 116;

@@ -845,6 +845,17 @@ impl IncomePlanTotals {
             .saturating_add(self.vacation_pension_premiums)
             .saturating_add(self.salary_exchange_pension_contributions)
     }
+
+    /// Total employer occupational-pension contributions as a percentage of
+    /// the current-year pension-salary basis after salary exchange.
+    pub fn employer_pension_share_of_basis(self) -> f64 {
+        if self.pension_salary_basis == 0 {
+            0.0
+        } else {
+            f64::from(self.total_employer_pension_contributions()) * 100.0
+                / f64::from(self.pension_salary_basis)
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -855,8 +866,21 @@ pub struct SalaryExchangeAllowance {
     pub regular_pension_premiums: u32,
     pub vacation_pension_premiums: u32,
     pub other_exchange_contributions: u32,
+    pub selected_exchange_contribution: u32,
+    pub total_employer_pension_contributions: u32,
     pub available_contribution: u32,
     pub maximum_sacrifice: u32,
+}
+
+impl SalaryExchangeAllowance {
+    pub fn contribution_share_of_basis(self) -> f64 {
+        if self.pension_salary_basis_after == 0 {
+            0.0
+        } else {
+            f64::from(self.total_employer_pension_contributions) * 100.0
+                / f64::from(self.pension_salary_basis_after)
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -899,6 +923,11 @@ impl SalaryExchangeContext {
             pension_salary_basis_before
         };
         let ceiling = SalaryExchange::allowance_ceiling(pension_salary_basis_after);
+        let mut applied_exchange = exchange;
+        applied_exchange.sacrificed_salary = sacrifice;
+        let selected_exchange_contribution = applied_exchange.pension_contribution();
+        let total_employer_pension_contributions =
+            pension_contributions_before.saturating_add(selected_exchange_contribution);
 
         SalaryExchangeAllowance {
             ceiling,
@@ -907,6 +936,8 @@ impl SalaryExchangeContext {
             regular_pension_premiums: self.regular_pension_premiums,
             vacation_pension_premiums: self.vacation_pension_premiums,
             other_exchange_contributions: self.other_exchange_contributions,
+            selected_exchange_contribution,
+            total_employer_pension_contributions,
             available_contribution: ceiling.saturating_sub(pension_contributions_before),
             maximum_sacrifice,
         }
@@ -1067,6 +1098,19 @@ mod tests {
         assert_eq!(totals.salary_exchange_sacrifice, 168_012);
         assert_eq!(totals.salary_exchange_pension_contributions, 177_689);
         assert_eq!(totals.total_employer_pension_contributions(), 352_408);
+        assert_eq!(
+            totals.employer_pension_share_of_basis(),
+            f64::from(352_408) * 100.0 / f64::from(1_006_883)
+        );
+        let applied_allowance = plan.salary_exchange_allowance(lump_id).unwrap();
+        assert_eq!(
+            applied_allowance.total_employer_pension_contributions,
+            352_408
+        );
+        assert_eq!(
+            applied_allowance.contribution_share_of_basis(),
+            f64::from(352_408) * 100.0 / f64::from(1_006_883)
+        );
     }
 
     #[test]
