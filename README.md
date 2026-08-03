@@ -48,8 +48,8 @@ new maximum instead of silently calculating from inconsistent inputs.
 cargo run -p swedish-tax-gui
 ```
 
-The GUI is a separate workspace package. Building the library or command-line
-programs does not build the graphical application unless it is selected.
+The GUI is a separate workspace package. A normal `cargo build` from the
+repository root builds both the core/CLI package and the graphical application.
 
 ## Sources
 

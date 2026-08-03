@@ -15,5 +15,5 @@ ron = "0.12"
 
 [workspace]
 members = ["gui"]
-default-members = ["."]
+default-members = [".", "gui"]
 resolver = "2"
