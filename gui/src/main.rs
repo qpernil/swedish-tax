@@ -2185,7 +2185,8 @@ fn withholding_rule_text(rule: AppliedWithholding) -> String {
 }
 
 impl eframe::App for TaxApp {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        let state_before_edit = self.persisted_state();
         ui.painter()
             .rect_filled(ui.max_rect(), 0.0, background_color());
 
@@ -2248,14 +2249,14 @@ impl eframe::App for TaxApp {
             });
 
         self.income_editor(ui.ctx());
-    }
 
-    fn save(&mut self, storage: &mut dyn eframe::Storage) {
-        eframe::set_value(storage, APP_STATE_STORAGE_KEY, &self.persisted_state());
-    }
-
-    fn auto_save_interval(&self) -> std::time::Duration {
-        std::time::Duration::from_millis(500)
+        let state_after_edit = self.persisted_state();
+        if state_after_edit != state_before_edit
+            && let Some(storage) = frame.storage_mut()
+        {
+            eframe::set_value(storage, APP_STATE_STORAGE_KEY, &state_after_edit);
+            storage.flush();
+        }
     }
 }
 
