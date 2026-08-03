@@ -1393,6 +1393,51 @@ mod tests {
     }
 
     #[test]
+    fn removing_every_income_kind_by_id_at_any_position_restores_the_calculation() {
+        let mut baseline = IncomePlan::with_monthly_salary(45_000);
+        baseline.entries[0].description = "Salary".to_owned();
+        let pension_id = baseline.add_entry(IncomeKind::AnnualOccupationalPension);
+        let pension = baseline
+            .entries
+            .iter_mut()
+            .find(|entry| entry.id == pension_id)
+            .unwrap();
+        pension.description = "Pension".to_owned();
+        pension.amount = 120_000;
+        pension.payer_role = PayerRole::Secondary;
+        let baseline_calculation =
+            crate::Calculation::new(32, TaxAgeGroup::Under66AtYearStart, &baseline).unwrap();
+
+        for kind in IncomeKind::ALL {
+            for target_index in 0..=baseline.entries.len() {
+                let mut plan = baseline.clone();
+                let target_id = plan.add_entry(kind);
+                let appended_index = plan.entries.len() - 1;
+                plan.entries[appended_index].description = format!("Temporary {kind:?}");
+                plan.entries[appended_index].amount = 60_000;
+                let added_entry = plan.entries.remove(appended_index);
+                plan.entries.insert(target_index, added_entry);
+
+                assert_eq!(plan.entries[target_index].id, target_id);
+                assert_ne!(
+                    crate::Calculation::new(32, TaxAgeGroup::Under66AtYearStart, &plan),
+                    Some(baseline_calculation),
+                    "{kind:?} at index {target_index} did not affect the calculation"
+                );
+
+                plan.remove_entry(target_id);
+
+                assert_eq!(plan.entries, baseline.entries);
+                assert_eq!(
+                    crate::Calculation::new(32, TaxAgeGroup::Under66AtYearStart, &plan),
+                    Some(baseline_calculation),
+                    "{kind:?} at index {target_index} did not restore the calculation"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn enabling_adjustment_defaults_to_non_dividend_main_payers() {
         let mut plan = IncomePlan::with_annual_salary(930_000);
         let secondary_id = plan.add_entry(IncomeKind::AnnualOccupationalPension);
