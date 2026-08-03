@@ -1,6 +1,6 @@
 use crate::{
-    monthly_deduction, one_time_withholding_rate, AnnualIncomeProfile, TaxAgeGroup, TaxColumn,
-    TaxDeduction,
+    monthly_deduction, one_time_withholding_rate, AnnualIncomeProfile, DividendAllowance2027,
+    DividendAllowanceInputs2027, DividendAllowanceIssue, TaxAgeGroup, TaxColumn, TaxDeduction,
 };
 
 #[derive(
@@ -82,6 +82,13 @@ impl IncomeKind {
 
     pub const fn is_dividend(self) -> bool {
         matches!(self, Self::OwnCompanyDividend)
+    }
+
+    pub const fn is_salary(self) -> bool {
+        matches!(
+            self,
+            Self::AnnualSalary | Self::MonthlySalary | Self::OneTimeSalary
+        )
     }
 
     pub const fn is_pension(self) -> bool {
@@ -238,6 +245,10 @@ pub struct IncomeEntry {
     pub start: Date2026,
     pub end: Date2026,
     pub payer_role: PayerRole,
+    /// Whether this cash salary is paid by the owner's company or qualifying group.
+    /// For 2026 income rows it feeds the following year's 3:12 wage basis.
+    #[serde(default)]
+    pub own_company_sourced: bool,
     pub adjustment_applies: bool,
     /// Use this recurring salary's full-year projection as the income basis
     /// behind a percentage jämkning decision.
@@ -268,6 +279,7 @@ impl IncomeEntry {
             start: Date2026::new(1, 1),
             end: Date2026::new(12, 31),
             payer_role: PayerRole::Main,
+            own_company_sourced: false,
             adjustment_applies: false,
             use_full_year_projection_as_adjustment_basis: false,
             custom_withholding_percent: None,
@@ -311,6 +323,9 @@ impl IncomeEntry {
             self.adjustment_applies = false;
         } else if previous_kind.is_dividend() && self.payer_role == PayerRole::Main {
             self.adjustment_applies = adjustment_available;
+        }
+        if !kind.is_salary() {
+            self.own_company_sourced = false;
         }
     }
 
@@ -576,6 +591,8 @@ impl VacationCompensation {
 pub struct IncomePlan {
     pub entries: Vec<IncomeEntry>,
     pub adjustment_percent: Option<u32>,
+    #[serde(default)]
+    pub dividend_allowance: DividendAllowanceInputs2027,
     next_id: u64,
 }
 
@@ -593,6 +610,7 @@ impl IncomePlan {
         Self {
             entries: vec![entry],
             adjustment_percent: None,
+            dividend_allowance: DividendAllowanceInputs2027::default(),
             next_id: 2,
         }
     }
@@ -604,6 +622,7 @@ impl IncomePlan {
         Self {
             entries: vec![entry],
             adjustment_percent: None,
+            dividend_allowance: DividendAllowanceInputs2027::default(),
             next_id: 2,
         }
     }
@@ -753,6 +772,22 @@ impl IncomePlan {
             }
         }
         totals
+    }
+
+    /// 2026 cash salary marked as paid by the owner's company/group and used
+    /// in the preliminary 2027 gränsbelopp.
+    pub fn own_company_sourced_work_income(&self) -> u32 {
+        self.entries
+            .iter()
+            .filter(|entry| entry.kind.is_salary() && entry.own_company_sourced)
+            .map(IncomeEntry::total_annual_amount)
+            .fold(0_u32, u32::saturating_add)
+    }
+
+    /// Preliminary 2027 allowance using marked 2026 own-company cash salary.
+    pub fn dividend_allowance_2027(&self) -> Result<DividendAllowance2027, DividendAllowanceIssue> {
+        self.dividend_allowance
+            .calculate(self.own_company_sourced_work_income())
     }
 
     pub fn estimated_withholding(&self, table: u8, age_group: TaxAgeGroup) -> WithholdingSummary {
@@ -1594,6 +1629,42 @@ mod tests {
             entry.rule == AppliedWithholding::ActualAmount
                 && entry.withheld == (index as u32 + 1) * 1_000
         }));
+    }
+
+    #[test]
+    fn own_company_source_only_totals_cash_salary_types() {
+        let mut plan = IncomePlan::with_monthly_salary(10_000);
+        plan.entries[0].own_company_sourced = true;
+        let one_time_id = plan.add_entry(IncomeKind::OneTimeSalary);
+        let one_time = plan
+            .entries
+            .iter_mut()
+            .find(|entry| entry.id == one_time_id)
+            .unwrap();
+        one_time.amount = 20_000;
+        one_time.own_company_sourced = true;
+        let pension_id = plan.add_entry(IncomeKind::AnnualOccupationalPension);
+        let pension = plan
+            .entries
+            .iter_mut()
+            .find(|entry| entry.id == pension_id)
+            .unwrap();
+        pension.amount = 50_000;
+        pension.own_company_sourced = true;
+
+        assert_eq!(plan.own_company_sourced_work_income(), 140_000);
+    }
+
+    #[test]
+    fn marked_2026_salary_feeds_the_preliminary_2027_dividend_allowance() {
+        let mut plan = IncomePlan::with_monthly_salary(50_000);
+        plan.entries[0].own_company_sourced = true;
+
+        let allowance = plan.dividend_allowance_2027().unwrap();
+
+        assert_eq!(allowance.owner_cash_salary, 600_000);
+        assert_eq!(allowance.company_cash_payroll, 600_000);
+        assert_eq!(allowance.total, 333_600);
     }
 
     #[test]

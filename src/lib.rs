@@ -17,6 +17,7 @@
 
 mod app_state;
 mod calculation;
+mod dividend_allowance;
 mod income_bases;
 mod income_plan;
 mod withholding;
@@ -25,6 +26,13 @@ pub use app_state::{PersistedAppState, PERSISTED_APP_STATE_VERSION};
 pub use calculation::{
     AdjustmentBalanceTrace, AdjustmentCalibration, Calculation, TaxBalance, DEFAULT_MONTHLY_INCOME,
     DIVIDEND_TAX_PERCENT,
+};
+
+pub use dividend_allowance::{
+    DividendAllowance2027, DividendAllowanceInputs2027, DividendAllowanceIssue,
+    DIVIDEND_ACQUISITION_COST_THRESHOLD, DIVIDEND_BASIC_AMOUNT_2027,
+    DIVIDEND_WAGE_ALLOWANCE_PERCENT, DIVIDEND_WAGE_CAP_MULTIPLIER, DIVIDEND_WAGE_DEDUCTION_2027,
+    QUALIFIED_DIVIDEND_TAX_PERCENT,
 };
 
 pub use income_bases::{

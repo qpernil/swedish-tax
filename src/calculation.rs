@@ -1,13 +1,13 @@
 use crate::{
     annual_tax_for_income_profile, estimated_sgi_progress_for_income, monthly_deduction,
     public_pension_progress_for_income, AnnualIncomeProfile, AnnualTax, IncomeBasisEstimate,
-    IncomePlan, TaxAgeGroup, TaxDeduction,
+    IncomePlan, TaxAgeGroup, TaxDeduction, QUALIFIED_DIVIDEND_TAX_PERCENT,
 };
 
 /// Default monthly salary used by the GUI. It is the highest whole monthly
 /// amount whose annualized income stays below the 2026 state-tax breakpoint.
 pub const DEFAULT_MONTHLY_INCOME: u32 = 660_400 / 12;
-pub const DIVIDEND_TAX_PERCENT: u32 = 20;
+pub const DIVIDEND_TAX_PERCENT: u32 = QUALIFIED_DIVIDEND_TAX_PERCENT;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TaxBalance {
