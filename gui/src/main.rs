@@ -1,7 +1,9 @@
 use eframe::egui;
 use swedish_tax::{
-    AdjustmentCalibration, AnnualTax, AppliedWithholding, Calculation, DIVIDEND_TAX_PERCENT,
-    Date2026, EntryWithholding, IncomeBasisEstimate, IncomeEntry, IncomeKind, IncomePlan,
+    AdjustmentCalibration, AnnualTax, AppliedWithholding, Calculation,
+    DIVIDEND_ACQUISITION_COST_THRESHOLD, DIVIDEND_BASIC_AMOUNT_2027, DIVIDEND_TAX_PERCENT,
+    DIVIDEND_WAGE_DEDUCTION_2027, Date2026, DividendAllowanceInputs2027, DividendAllowanceIssue,
+    EntryWithholding, IncomeBasisEstimate, IncomeEntry, IncomeKind, IncomePlan,
     IncomePlanValidationIssue, IncomeTaxCategory, MAX_TAX_TABLE, MIN_TAX_TABLE, PayerRole,
     PersistedAppState, RegularPensionPremium, SECONDARY_WITHHOLDING_PERCENT, SalaryExchange,
     SalaryExchangeContext, TaxAgeGroup, TaxBalance, TaxColumn, TaxDeduction, VacationCompensation,
@@ -94,7 +96,7 @@ impl TaxApp {
             card_heading(
                 ui,
                 "Tax settings",
-                "Selected table and age-dependent columns",
+                "Tax table, age-dependent columns, and jämkning",
             );
             ui.add_space(12.0);
             ui.horizontal_wrapped(|ui| {
@@ -138,6 +140,9 @@ impl TaxApp {
                             );
                         });
                 });
+
+                ui.add_space(12.0);
+                adjustment_editor(ui, &mut self.income_plan);
             });
             ui.add_space(12.0);
             ui.label(
@@ -600,146 +605,379 @@ fn marginal_rate_help(ui: &mut egui::Ui) {
     ui.label("The additional annual tax is divided by 12,000 and shown as a percentage.");
 }
 
-fn adjustment_editor(ui: &mut egui::Ui, plan: &mut IncomePlan, table: u8, age_group: TaxAgeGroup) {
-    egui::Frame::new()
-        .fill(egui::Color32::from_rgb(239, 247, 244))
-        .stroke(egui::Stroke::new(
-            1.0,
-            egui::Color32::from_rgb(184, 211, 201),
-        ))
-        .corner_radius(8.0)
-        .inner_margin(16.0)
-        .show(ui, |ui| {
-            let mut enabled = plan.adjustment_percent.is_some();
-            let shown_count = plan
-                .entries
-                .iter()
-                .filter(|entry| {
-                    !entry.kind.is_dividend()
-                        && entry.adjustment_applies
-                        && entry.custom_withholding_percent.is_none()
-                        && entry.actual_withholding.is_none()
-                })
-                .count();
-            let overridden_count = plan
-                .entries
-                .iter()
-                .filter(|entry| {
-                    !entry.kind.is_dividend()
-                        && entry.adjustment_applies
-                        && (entry.custom_withholding_percent.is_some()
-                            || entry.actual_withholding.is_some())
-                })
-                .count();
-            ui.horizontal(|ui| {
-                ui.vertical(|ui| {
-                    ui.label(
-                        egui::RichText::new("Jämkning")
-                            .strong()
-                            .size(16.0)
-                            .color(primary_text()),
-                    );
-                    ui.label(
-                        egui::RichText::new("Percentage decision and full-year calibration")
-                            .small()
-                            .color(secondary_text()),
-                    );
-                });
-                if let Some(percent) = plan.adjustment_percent {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "{percent}% · {}",
-                                if shown_count == 0 {
-                                    "no payer".to_owned()
-                                } else {
-                                    format!(
-                                        "{shown_count} payer{}",
-                                        if shown_count == 1 { "" } else { "s" }
-                                    )
-                                }
-                            ))
-                            .small()
-                            .strong()
-                            .color(yellow_text())
-                            .background_color(egui::Color32::from_rgb(252, 246, 225)),
-                        );
-                    });
-                }
-            });
-            ui.add_space(10.0);
-            ui.horizontal_wrapped(|ui| {
-                ui.vertical(|ui| {
-                    if ui
-                        .checkbox(&mut enabled, "Use a percentage jämkning decision")
-                        .changed()
-                    {
-                        plan.set_adjustment_enabled(enabled);
-                    }
-                });
-                if let Some(percent) = &mut plan.adjustment_percent {
-                    ui.separator();
-                    ui.vertical(|ui| {
-                        ui.label(secondary_label("Decision withholding"));
-                        percentage_editor(ui, "adjustment-percentage", percent);
-                    });
-                }
-            });
+fn adjustment_editor(ui: &mut egui::Ui, plan: &mut IncomePlan) {
+    let mut enabled = plan.adjustment_percent.is_some();
+    let shown_count = plan
+        .entries
+        .iter()
+        .filter(|entry| {
+            !entry.kind.is_dividend()
+                && entry.adjustment_applies
+                && entry.custom_withholding_percent.is_none()
+                && entry.actual_withholding.is_none()
+        })
+        .count();
+    let overridden_count = plan
+        .entries
+        .iter()
+        .filter(|entry| {
+            !entry.kind.is_dividend()
+                && entry.adjustment_applies
+                && (entry.custom_withholding_percent.is_some()
+                    || entry.actual_withholding.is_some())
+        })
+        .count();
 
-            let Some(percent) = plan.adjustment_percent else {
+    ui.vertical(|ui| {
+        ui.label(secondary_label("Jämkning"));
+        if ui
+            .checkbox(&mut enabled, "Have decision")
+            .on_hover_text(
+                "Store the percentage from your Skatteverket decision. The main payer uses it by default; change that per payer below.",
+            )
+            .changed()
+        {
+            plan.set_adjustment_enabled(enabled);
+        }
+        if let Some(percent) = &mut plan.adjustment_percent {
+            percentage_editor(ui, "adjustment-percentage", percent);
+            let payer_status = if overridden_count > 0 {
+                format!("{shown_count} applied · {overridden_count} overridden")
+            } else {
+                format!(
+                    "{shown_count} payer{}",
+                    if shown_count == 1 { "" } else { "s" }
+                )
+            };
+            ui.label(
+                egui::RichText::new(payer_status)
+                    .small()
+                    .color(secondary_text()),
+            );
+        }
+    });
+}
+
+fn dividend_allowance_editor(ui: &mut egui::Ui, plan: &mut IncomePlan) {
+    let current_year_own_company_salary = plan.own_company_sourced_work_income();
+    card(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.vertical(|ui| {
+                ui.label(
+                    egui::RichText::new("Preliminary 2027 dividend allowance")
+                        .strong()
+                        .size(16.0)
+                        .color(primary_text()),
+                );
                 ui.label(
                     egui::RichText::new(
-                        "Enable this only when you have a percentage decision from Skatteverket.",
+                        "Dividend paid in 2027 using your company’s short 2026 first year",
                     )
                     .small()
                     .color(secondary_text()),
                 );
-                return;
-            };
-
-            let totals = plan.totals();
-            let projected_tax = Calculation::new(table, age_group, plan)
-                .and_then(|calculation| calculation.adjustment_calibration)
-                .map(|calibration| calibration.projected_ordinary_tax);
-            ui.add_space(8.0);
-            ui.columns(3, |columns| {
-                compact_fact(
-                    &mut columns[0],
-                    "Full-year basis",
-                    if totals.adjustment_basis_work_income > 0 {
-                        format_sek(totals.adjustment_basis_work_income)
-                    } else {
-                        "Not selected".to_owned()
-                    },
-                );
-                compact_fact(
-                    &mut columns[1],
-                    "Applied to payers",
-                    if overridden_count > 0 {
-                        format!("{shown_count} applied · {overridden_count} overridden")
-                    } else {
-                        format!(
-                            "{shown_count} payer{}",
-                            if shown_count == 1 { "" } else { "s" }
-                        )
-                    },
-                );
-                compact_fact(
-                    &mut columns[2],
-                    "Calibrated tax projection",
-                    projected_tax
-                        .map(format_sek)
-                        .unwrap_or_else(|| "Needs a basis".to_owned()),
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
+                ui.label(
+                    egui::RichText::new("Income year 2027 · K10 in 2028")
+                        .small()
+                        .strong()
+                        .color(yellow_text())
+                        .background_color(egui::Color32::from_rgb(252, 246, 225)),
                 );
             });
-            ui.label(
-                egui::RichText::new(format!(
-                    "The {percent}% decision affects withholding only on rows marked as shown. A selected full-year basis also calibrates the annual tax projection."
-                ))
-                .small()
-                .color(secondary_text()),
+        });
+        ui.add_space(10.0);
+
+        if ui.available_width() >= 760.0 {
+            ui.columns(2, |columns| {
+                dividend_ownership_inputs(&mut columns[0], &mut plan.dividend_allowance);
+                dividend_payroll_inputs(&mut columns[1], &mut plan.dividend_allowance);
+            });
+            ui.add_space(8.0);
+            dividend_capital_inputs(ui, &mut plan.dividend_allowance);
+        } else {
+            dividend_ownership_inputs(ui, &mut plan.dividend_allowance);
+            ui.add_space(8.0);
+            dividend_payroll_inputs(ui, &mut plan.dividend_allowance);
+            ui.add_space(8.0);
+            dividend_capital_inputs(ui, &mut plan.dividend_allowance);
+        }
+
+        ui.add_space(10.0);
+        match plan.dividend_allowance_2027() {
+            Ok(allowance) => {
+                ui.columns(3, |columns| {
+                    compact_fact(
+                        &mut columns[0],
+                        "Max dividend at 20%",
+                        format_sek(allowance.total),
+                    );
+                    compact_fact(
+                        &mut columns[1],
+                        "Personal tax if fully used",
+                        format_sek(allowance.tax_at_twenty_percent()),
+                    );
+                    compact_fact(
+                        &mut columns[2],
+                        "Net if fully used",
+                        format_sek(allowance.net_after_twenty_percent_tax()),
+                    );
+                });
+
+                ui.add_space(8.0);
+                egui::Grid::new("dividend-allowance-breakdown")
+                    .num_columns(2)
+                    .striped(true)
+                    .min_col_width(240.0)
+                    .show(ui, |ui| {
+                        value_row(
+                            ui,
+                            "Ownership-adjusted basic amount",
+                            format_sek(allowance.basic_amount),
+                        );
+                        value_row(
+                            ui,
+                            "Your marked 2026 company salary",
+                            format_sek(allowance.owner_cash_salary),
+                        );
+                        value_row(
+                            ui,
+                            "Company/group payroll used",
+                            format_sek(allowance.company_cash_payroll),
+                        );
+                        value_row(
+                            ui,
+                            &format!(
+                                "Wage basis after {} deduction",
+                                format_sek(DIVIDEND_WAGE_DEDUCTION_2027)
+                            ),
+                            format_sek(allowance.joint_wage_basis_after_deduction),
+                        );
+                        value_row(
+                            ui,
+                            "Your wage-based allowance before cap",
+                            format_sek(allowance.wage_allowance_before_cap),
+                        );
+                        value_row(
+                            ui,
+                            "50× owner/related salary cap",
+                            format_sek(allowance.wage_cap),
+                        );
+                        value_row(
+                            ui,
+                            "Wage-based allowance used",
+                            format_sek(allowance.wage_allowance),
+                        );
+                        value_row(
+                            ui,
+                            "Acquisition-cost interest",
+                            format_sek(allowance.acquisition_cost_interest),
+                        );
+                        value_row(
+                            ui,
+                            "Saved dividend allowance",
+                            format_sek(allowance.saved_allowance),
+                        );
+                        value_row(ui, "2027 tax gränsbelopp", format_sek(allowance.total));
+                    });
+
+                ui.add_space(8.0);
+                ui.label(
+                    egui::RichText::new(format!(
+                        "Maximum 2027 dividend eligible for 20% tax: {}.",
+                        format_sek(allowance.total),
+                    ))
+                    .strong()
+                    .color(green_color()),
+                );
+                ui.label(
+                    egui::RichText::new(
+                        "For a normal privately held Swedish AB, no preliminary personal tax is normally withheld from the dividend. The company pays the full dividend, reports it, and you declare it on K10 in 2028; any remaining personal tax is settled through your final-tax account.",
+                    )
+                    .small()
+                    .color(secondary_text()),
+                );
+            }
+            Err(issue) => {
+                ui.colored_label(
+                    egui::Color32::DARK_RED,
+                    dividend_allowance_issue_text(issue),
+                );
+            }
+        }
+
+        ui.add_space(6.0);
+        ui.label(
+            egui::RichText::new(format!(
+                "2026 cash salary marked as own-company sourced: {}. This feeds the 2027 owner-salary and one-person payroll calculation directly.",
+                format_sek(current_year_own_company_salary),
+            ))
+            .small()
+            .color(secondary_text()),
+        );
+        ui.label(
+            egui::RichText::new(
+                "The salary total includes cash salary, one-time salary, and vacation compensation after salary exchange. Pension income, benefits, and pension contributions are excluded.",
+            )
+            .small()
+            .color(secondary_text()),
+        );
+        ui.label(
+            egui::RichText::new(
+                "This is the tax allowance only. The actual dividend also requires sufficient free equity in the adopted 2026 balance sheet, a prudence assessment, and a shareholder-meeting decision; bank balance alone is not enough.",
+            )
+            .small()
+            .color(secondary_text()),
+        );
+    });
+}
+
+fn dividend_ownership_inputs(ui: &mut egui::Ui, inputs: &mut DividendAllowanceInputs2027) {
+    input_group(ui, "Ownership at 1 January 2027", |ui| {
+        ui.horizontal_wrapped(|ui| {
+            ui.label(secondary_label("Your share in this company"));
+            basis_points_percentage_editor(
+                ui,
+                "dividend-own-share",
+                &mut inputs.ownership_basis_points,
             );
         });
+        ui.horizontal_wrapped(|ui| {
+            ui.label(secondary_label("Spouse share in this company"));
+            basis_points_percentage_editor(
+                ui,
+                "dividend-spouse-share",
+                &mut inputs.spouse_ownership_basis_points,
+            );
+        });
+        ui.horizontal_wrapped(|ui| {
+            ui.label(secondary_label(
+                "Your summed shares in other qualified companies",
+            ));
+            multi_company_ownership_editor(ui, &mut inputs.other_qualified_ownership_basis_points);
+        });
+    });
+}
+
+fn input_group(ui: &mut egui::Ui, title: &str, add_contents: impl FnOnce(&mut egui::Ui)) {
+    egui::Frame::new()
+        .fill(egui::Color32::from_rgb(249, 251, 250))
+        .stroke(egui::Stroke::new(1.0, border_color()))
+        .corner_radius(6.0)
+        .inner_margin(10.0)
+        .show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.label(egui::RichText::new(title).strong().color(primary_text()));
+            ui.add_space(4.0);
+            add_contents(ui);
+        });
+}
+
+fn dividend_payroll_inputs(ui: &mut egui::Ui, inputs: &mut DividendAllowanceInputs2027) {
+    input_group(ui, "Cash compensation paid in 2026", |ui| {
+        ui.checkbox(
+            &mut inputs.one_person_company,
+            "One-person company — marked salary is the total payroll",
+        );
+        if inputs.one_person_company {
+            ui.label(
+                egui::RichText::new(
+                    "Your owner salary and total payroll are derived from marked 2026 salary rows.",
+                )
+                .small()
+                .strong()
+                .color(blue_color()),
+            );
+        } else {
+            dividend_sek_input(
+                ui,
+                "Company/group payroll — all employees",
+                &mut inputs.company_cash_payroll_2026,
+            );
+            dividend_sek_input(
+                ui,
+                "Highest related person's salary",
+                &mut inputs.highest_related_cash_salary_2026,
+            );
+        }
+        ui.label(
+            egui::RichText::new(
+                "Total payroll includes qualifying cash compensation to all employees in the company and qualifying subsidiaries. Benefits and pension contributions are excluded.",
+            )
+            .small()
+            .color(secondary_text()),
+        );
+        ui.label(
+            egui::RichText::new(format!(
+                "At 100% ownership, payroll must exceed {} before the wage-based allowance becomes positive.",
+                format_sek(DIVIDEND_WAGE_DEDUCTION_2027),
+            ))
+            .small()
+            .strong()
+            .color(blue_color()),
+        );
+    });
+}
+
+fn dividend_capital_inputs(ui: &mut egui::Ui, inputs: &mut DividendAllowanceInputs2027) {
+    input_group(ui, "Capital and carried allowance", |ui| {
+        ui.horizontal_wrapped(|ui| {
+            dividend_sek_input(ui, "Acquisition cost", &mut inputs.acquisition_cost);
+            dividend_sek_input(ui, "Saved allowance", &mut inputs.saved_allowance);
+        });
+        ui.label(
+            egui::RichText::new(format!(
+                "Only acquisition cost above {} earns interest. The exact 2027 rate uses the government borrowing rate on 30 November 2026 plus 9%, so it is not known yet.",
+                format_sek(DIVIDEND_ACQUISITION_COST_THRESHOLD),
+            ))
+            .small()
+            .color(secondary_text()),
+        );
+    });
+}
+
+fn dividend_sek_input(ui: &mut egui::Ui, label: &str, value: &mut u32) {
+    ui.vertical(|ui| {
+        ui.label(secondary_label(label));
+        ui.add(
+            egui::DragValue::new(value)
+                .range(0..=MAX_INCOME)
+                .suffix(" SEK")
+                .speed(1_000.0),
+        );
+    });
+}
+
+fn multi_company_ownership_editor(ui: &mut egui::Ui, basis_points: &mut u32) {
+    let mut percent = f64::from(*basis_points) / 100.0;
+    let response = ui.add(
+        egui::DragValue::new(&mut percent)
+            .range(0.0..=10_000.0)
+            .suffix(" %")
+            .speed(0.25)
+            .max_decimals(2),
+    );
+    if response.changed() {
+        *basis_points = (percent * 100.0).round() as u32;
+    }
+}
+
+fn dividend_allowance_issue_text(issue: DividendAllowanceIssue) -> &'static str {
+    match issue {
+        DividendAllowanceIssue::OwnershipExceedsOneHundredPercent => {
+            "Your ownership in one company cannot exceed 100%."
+        }
+        DividendAllowanceIssue::SpouseOwnershipExceedsCompany => {
+            "Your and your spouse's combined ownership cannot exceed 100%."
+        }
+        DividendAllowanceIssue::PersonalSalaryExceedsCompanyPayroll => {
+            "Owner or related-person salary cannot exceed the total company/group payroll."
+        }
+        DividendAllowanceIssue::MissingAcquisitionCostInterestRate => {
+            "The exact 2027 acquisition-cost interest rate is not known until the government borrowing rate for 30 November 2026 has been established."
+        }
+    }
 }
 
 fn income_overview_table(
@@ -969,7 +1207,7 @@ fn selected_income_impact(
         if let Some(percent) = plan.adjustment_percent {
             audit_row(
                 ui,
-                "Jämkning shown to payer",
+                "Uses jämkning",
                 if entry.adjustment_applies {
                     format!("Yes — {percent}% withholding")
                 } else {
@@ -1258,6 +1496,21 @@ fn income_entry_editor(
                 }
             }
 
+            if entry.kind.is_salary() {
+                ui.add_space(8.0);
+                ui.checkbox(
+                    &mut entry.own_company_sourced,
+                    "Paid by my own company or qualifying group",
+                );
+                ui.label(
+                    egui::RichText::new(
+                        "This 2026 cash compensation feeds the preliminary 2027 3:12 owner-salary and payroll calculation.",
+                    )
+                    .small()
+                    .color(secondary_text()),
+                );
+            }
+
             if matches!(
                 entry.kind,
                 IncomeKind::AnnualSalary | IncomeKind::MonthlySalary
@@ -1304,7 +1557,7 @@ fn income_entry_editor(
                 if adjustment.is_some() {
                     ui.checkbox(
                         &mut entry.adjustment_applies,
-                        "Jämkning shown to this payer",
+                        "Use jämkning",
                     );
                 } else {
                     entry.adjustment_applies = false;
@@ -1967,8 +2220,6 @@ impl eframe::App for TaxApp {
                     ui.add_space(18.0);
 
                     self.controls(ui);
-                    ui.add_space(12.0);
-                    adjustment_editor(ui, &mut self.income_plan, self.table, self.age_group);
                     if let Some(calculation) =
                         Calculation::new(self.table, self.age_group, &self.income_plan)
                     {
@@ -1980,6 +2231,8 @@ impl eframe::App for TaxApp {
                             validation_message(self.income_plan.validation_issue()),
                         );
                     }
+                    ui.add_space(12.0);
+                    dividend_allowance_editor(ui, &mut self.income_plan);
 
                     ui.add_space(24.0);
                     ui.separator();
@@ -2385,7 +2638,70 @@ fn calculation_trace(
             );
 
             ui.add_space(10.0);
-            trace_heading(ui, "4", "Reconciliation");
+            trace_heading(ui, "4", "Preliminary 2027 dividend allowance");
+            if let Ok(allowance) = plan.dividend_allowance_2027() {
+                trace_line(
+                    ui,
+                    "2027 basic amount",
+                    format!(
+                        "{} allocated by ownership and the multi-company cap",
+                        format_sek(DIVIDEND_BASIC_AMOUNT_2027),
+                    ),
+                    format_sek(allowance.basic_amount),
+                );
+                trace_line(
+                    ui,
+                    "Marked 2026 owner salary",
+                    "Cash salary, one-time salary, and vacation compensation from marked rows",
+                    format_sek(allowance.owner_cash_salary),
+                );
+                trace_line(
+                    ui,
+                    "2027 wage-based allowance",
+                    format!(
+                        "50% of the ownership-adjusted 2026 payroll after {} deduction, limited to {}",
+                        format_sek(DIVIDEND_WAGE_DEDUCTION_2027),
+                        format_sek(allowance.wage_cap),
+                    ),
+                    format_sek(allowance.wage_allowance),
+                );
+                trace_line(
+                    ui,
+                    "Acquisition-cost interest",
+                    format!(
+                        "2027 rate applied to {} above the {} threshold",
+                        format_sek(allowance.acquisition_cost_interest_basis),
+                        format_sek(DIVIDEND_ACQUISITION_COST_THRESHOLD),
+                    ),
+                    format_sek(allowance.acquisition_cost_interest),
+                );
+                trace_line(
+                    ui,
+                    "2027 tax gränsbelopp",
+                    format!(
+                        "{} basic + {} wage + {} interest + {} saved allowance",
+                        format_sek(allowance.basic_amount),
+                        format_sek(allowance.wage_allowance),
+                        format_sek(allowance.acquisition_cost_interest),
+                        format_sek(allowance.saved_allowance),
+                    ),
+                    format_sek(allowance.total),
+                );
+                trace_line(
+                    ui,
+                    "Maximum dividend at 20%",
+                    "Equals the tax gränsbelopp; company-law distribution capacity is separate",
+                    format_sek(allowance.total),
+                );
+            } else {
+                ui.colored_label(
+                    egui::Color32::DARK_RED,
+                    "Complete the 2027 dividend inputs to show this trace.",
+                );
+            }
+
+            ui.add_space(10.0);
+            trace_heading(ui, "5", "Reconciliation");
             if let Some(trace) = calculation.adjustment_balance_trace() {
                 ui.label(
                     egui::RichText::new(
