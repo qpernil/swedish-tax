@@ -202,8 +202,6 @@ struct SwedishTaxAnnualTaxResult swedish_tax_annual_tax_for_income_profile(uint3
 
 uint32_t swedish_tax_contract_version(void);
 
-const char *swedish_tax_engine_badge(void);
-
 struct SwedishTaxCalculationResult swedish_tax_calculate_plan(const struct SwedishTaxPlanRequest *request);
 
 void swedish_tax_calculation_result_free(struct SwedishTaxCalculationResult result);

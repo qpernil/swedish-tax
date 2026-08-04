@@ -1,4 +1,4 @@
-use std::{ffi::c_char, panic::catch_unwind, slice};
+use std::{panic::catch_unwind, slice};
 
 use swedish_tax::{
     AdjustmentCalibration, AppliedWithholding, Calculation, Date2026, DividendAllowanceInputs2027,
@@ -9,7 +9,6 @@ use swedish_tax::{
 use super::{SwedishTaxAnnualTaxResult, STATUS_INTERNAL_ERROR, STATUS_INVALID_INPUT, STATUS_OK};
 
 const CONTRACT_VERSION: u32 = 1;
-const ENGINE_BADGE: &[u8] = b"Rust core active\0";
 
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
@@ -355,11 +354,6 @@ pub extern "C" fn swedish_tax_contract_version() -> u32 {
 }
 
 #[no_mangle]
-pub extern "C" fn swedish_tax_engine_badge() -> *const c_char {
-    ENGINE_BADGE.as_ptr().cast()
-}
-
-#[no_mangle]
 pub unsafe extern "C" fn swedish_tax_calculate_plan(
     request: *const SwedishTaxPlanRequest,
 ) -> SwedishTaxCalculationResult {
@@ -572,11 +566,5 @@ mod tests {
     fn optional_helper_is_unambiguous() {
         assert_eq!(none().into_option(), None);
         assert_eq!(some(42).into_option(), Some(42));
-    }
-
-    #[test]
-    fn engine_badge_is_a_static_c_string() {
-        let badge = unsafe { std::ffi::CStr::from_ptr(swedish_tax_engine_badge()) };
-        assert_eq!(badge.to_bytes(), b"Rust core active");
     }
 }
