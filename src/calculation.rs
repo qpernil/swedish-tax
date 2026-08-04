@@ -346,6 +346,21 @@ mod tests {
     }
 
     #[test]
+    fn qualified_dividend_tax_matches_skatteverket_parisa_example() {
+        let mut plan = IncomePlan::with_annual_salary(420_000);
+        let dividend_id = plan.add_entry(IncomeKind::OwnCompanyDividend);
+        plan.entries
+            .iter_mut()
+            .find(|entry| entry.id == dividend_id)
+            .unwrap()
+            .amount = 78_000;
+
+        let calculation = Calculation::new(32, TaxAgeGroup::Under66AtYearStart, &plan).unwrap();
+        assert_eq!(calculation.dividend_tax, 15_600);
+        assert_eq!(78_000 - calculation.dividend_tax, 62_400);
+    }
+
+    #[test]
     fn zero_income_and_every_published_table_are_supported() {
         let zero = IncomePlan::with_annual_salary(0);
         let calculation = Calculation::new(33, TaxAgeGroup::Under66AtYearStart, &zero).unwrap();

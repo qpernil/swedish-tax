@@ -266,7 +266,7 @@ fn annual_tax_from_bases(table: u8, bases: AnnualTaxBases) -> Option<AnnualTax> 
     let taxable_income = assessed_income.saturating_sub(basic_allowance);
 
     let state_income_tax = if taxable_income >= STATE_TAX_THRESHOLD + 200 {
-        (taxable_income - STATE_TAX_THRESHOLD) * 20 / 100
+        percentage_floor(taxable_income - STATE_TAX_THRESHOLD, 20, 100)
     } else {
         0
     };
@@ -677,6 +677,14 @@ mod tests {
                 total: 359_353,
             })
         );
+    }
+
+    #[test]
+    fn state_tax_uses_wide_arithmetic_for_high_incomes() {
+        let annual = annual_tax(34, TaxColumn::Column1, 300_000_000).unwrap();
+
+        assert_eq!(annual.taxable_income, 299_982_600);
+        assert_eq!(annual.state_income_tax, 59_867_920);
     }
 
     #[test]

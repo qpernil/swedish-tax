@@ -278,7 +278,7 @@ impl TaxApp {
             );
             ui.label(
                 egui::RichText::new(format!(
-                    "Total tjänstepension contribution {} · {:.2}% of pension salary after exchange",
+                    "Total tjänstepension contribution {} · {:.2}% of pensionable salary after exchange",
                     format_sek(totals.total_employer_pension_contributions()),
                     totals.employer_pension_share_of_basis(),
                 ))
@@ -613,7 +613,6 @@ fn adjustment_editor(ui: &mut egui::Ui, plan: &mut IncomePlan) {
         .filter(|entry| {
             !entry.kind.is_dividend()
                 && entry.adjustment_applies
-                && entry.custom_withholding_percent.is_none()
                 && entry.actual_withholding.is_none()
         })
         .count();
@@ -623,8 +622,7 @@ fn adjustment_editor(ui: &mut egui::Ui, plan: &mut IncomePlan) {
         .filter(|entry| {
             !entry.kind.is_dividend()
                 && entry.adjustment_applies
-                && (entry.custom_withholding_percent.is_some()
-                    || entry.actual_withholding.is_some())
+                && entry.actual_withholding.is_some()
         })
         .count();
 
@@ -950,17 +948,7 @@ fn dividend_sek_input(ui: &mut egui::Ui, label: &str, value: &mut u32) {
 }
 
 fn multi_company_ownership_editor(ui: &mut egui::Ui, basis_points: &mut u32) {
-    let mut percent = f64::from(*basis_points) / 100.0;
-    let response = ui.add(
-        egui::DragValue::new(&mut percent)
-            .range(0.0..=10_000.0)
-            .suffix(" %")
-            .speed(0.25)
-            .max_decimals(2),
-    );
-    if response.changed() {
-        *basis_points = (percent * 100.0).round() as u32;
-    }
+    exact_basis_points_percentage_editor(ui, "other-qualified-ownership", basis_points, 1_000_000);
 }
 
 fn dividend_allowance_issue_text(issue: DividendAllowanceIssue) -> &'static str {
@@ -1230,7 +1218,7 @@ fn selected_income_impact(
     audit_section(ui, "Pension", |ui| {
         audit_row(
             ui,
-            "Current-year pension salary basis",
+            "Current-year pensionable salary",
             optional_sek(entry.pension_salary_basis_amount()),
         );
         audit_row(
@@ -1461,14 +1449,19 @@ fn income_entry_editor(
                 let mut period_changed = false;
                 ui.columns(2, |columns| {
                     period_changed |=
-                        date_editor(&mut columns[0], "From", entry.id, &mut entry.start);
+                        date_editor(&mut columns[0], "First day", entry.id, &mut entry.start);
                     period_changed |= date_editor(
                         &mut columns[1],
-                        "Through",
+                        "Last day",
                         entry.id + 1_000_000,
                         &mut entry.end,
                     );
                 });
+                ui.label(
+                    egui::RichText::new("Both the first and last day are included.")
+                        .small()
+                        .color(secondary_text()),
+                );
                 ui.horizontal_wrapped(|ui| {
                     if ui.small_button("Full year").clicked() {
                         entry.start = Date2026::new(1, 1);
@@ -1478,7 +1471,7 @@ fn income_entry_editor(
                     if !entry.is_valid() {
                         ui.colored_label(
                             egui::Color32::DARK_RED,
-                            "End date must follow start date",
+                            "Last day must be on or after first day",
                         );
                     }
                     ui.label(
@@ -1563,27 +1556,23 @@ fn income_entry_editor(
                     entry.adjustment_applies = false;
                 }
 
-                let mut custom = entry.custom_withholding_percent.is_some();
-                if ui.checkbox(&mut custom, "Custom withholding").changed() {
-                    entry.set_custom_withholding_enabled(custom);
-                }
-                if let Some(percent) = &mut entry.custom_withholding_percent {
-                    percentage_editor(ui, "custom-withholding", percent);
-                }
                 ui.label(eligibility_badge(income_eligibility(entry.kind)));
             }
 
             ui.add_space(8.0);
             let mut use_actual = entry.actual_withholding.is_some();
             if ui
-                .checkbox(&mut use_actual, "Enter actual tax withheld")
+                .checkbox(&mut use_actual, "Use actual tax withheld")
                 .changed()
             {
                 entry.set_actual_withholding_enabled(use_actual);
+                if use_actual {
+                    entry.additional_withholding_per_payment = None;
+                }
             }
             if let Some(actual) = &mut entry.actual_withholding {
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(secondary_label("Actual withheld for this income row"));
+                    ui.label(secondary_label("Actual tax withheld"));
                     ui.add(
                         egui::DragValue::new(actual)
                             .range(0..=MAX_INCOME)
@@ -1593,11 +1582,47 @@ fn income_entry_editor(
                 });
                 ui.label(
                     egui::RichText::new(
-                        "This amount overrides table, jämkning, custom percentage, and the normal dividend assumption.",
+                        "Use this after payments have been made. It replaces the estimated table, secondary-payer, jämkning, and voluntary-extra amounts for this row.",
                     )
                     .small()
                     .color(secondary_text()),
                 );
+            }
+            if !entry.kind.is_dividend() {
+                let mut use_additional = entry.additional_withholding_per_payment.is_some();
+                if ui
+                    .checkbox(&mut use_additional, "Add voluntary extra withholding")
+                    .changed()
+                {
+                    entry.set_additional_withholding_enabled(use_additional);
+                    if use_additional {
+                        entry.actual_withholding = None;
+                    }
+                }
+                let payment_count = entry.withholding_payment_count();
+                if let Some(additional) = &mut entry.additional_withholding_per_payment {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(secondary_label(if payment_count > 1 {
+                            "Extra per payment"
+                        } else {
+                            "Extra withholding"
+                        }));
+                        ui.add(
+                            egui::DragValue::new(additional)
+                                .range(0..=MAX_INCOME)
+                                .suffix(" SEK")
+                                .speed(100.0),
+                        );
+                    });
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "Added on top of the normal withholding for each payment. Planned extra for period: {}.",
+                            format_sek(additional.saturating_mul(payment_count)),
+                        ))
+                        .small()
+                        .color(secondary_text()),
+                    );
+                }
             }
             if let Some(withholding) = withholding {
                 ui.add_space(6.0);
@@ -1605,7 +1630,15 @@ fn income_entry_editor(
                     egui::RichText::new(format!(
                         "Withholding used: {} · {}",
                         format_sek(withholding.withheld),
-                        withholding_rule_text(withholding.rule),
+                        if withholding.additional_withheld > 0 {
+                            format!(
+                                "{} + {} voluntary extra",
+                                withholding_rule_text(withholding.rule),
+                                format_sek(withholding.additional_withheld),
+                            )
+                        } else {
+                            withholding_rule_text(withholding.rule)
+                        },
                     ))
                     .small()
                     .color(secondary_text()),
@@ -1668,7 +1701,7 @@ fn regular_pension_premium_editor(ui: &mut egui::Ui, entry: &mut IncomeEntry) {
         .show(ui, |ui| {
             ui.checkbox(
                 &mut entry.included_in_pension_salary_basis,
-                "Include salary in current-year pension salary basis",
+                "Treat this salary as pensionable",
             );
             let mut enabled = entry.regular_pension_premium.is_some();
             if ui
@@ -1700,12 +1733,13 @@ fn regular_pension_premium_editor(ui: &mut egui::Ui, entry: &mut IncomeEntry) {
             ui.label(format!("Benchmark: {}", format_sek(benchmark)));
             let mut use_override = premium.monthly_override.is_some();
             if ui
-                .checkbox(&mut use_override, "Use actual monthly contribution")
+                .checkbox(&mut use_override, "Use actual monthly pension contribution")
                 .changed()
             {
                 premium.monthly_override = use_override.then_some(benchmark);
             }
             if let Some(actual) = &mut premium.monthly_override {
+                ui.label(secondary_label("Actual monthly pension contribution"));
                 ui.add_sized(
                     [ui.available_width().min(180.0), 28.0],
                     egui::DragValue::new(actual)
@@ -1742,7 +1776,7 @@ fn salary_exchange_editor(
         .show(ui, |ui| {
             ui.checkbox(
                 &mut entry.included_in_pension_salary_basis,
-                "Include this payment in current-year pension salary basis",
+                "Treat this payment as pensionable",
             )
             .on_hover_text(
                 "Off by default for a termination payment. Turn it on if the employment agreement treats this cash payment as pensionable salary.",
@@ -1814,17 +1848,17 @@ fn salary_exchange_editor(
                 .show(ui, |ui| {
                     value_row(
                         ui,
-                        "Current-year pension salary before exchange",
+                        "Current-year pensionable salary before exchange",
                         format_sek(allowance.pension_salary_basis_before),
                     );
                     value_row(
                         ui,
-                        "Current-year pension salary after exchange",
+                        "Current-year pensionable salary after exchange",
                         format_sek(allowance.pension_salary_basis_after),
                     );
                     value_row(
                         ui,
-                        "Indicative employer deduction ceiling after exchange",
+                        "35% contribution ceiling",
                         format_sek(allowance.ceiling),
                     );
                     value_row(
@@ -1848,7 +1882,7 @@ fn salary_exchange_editor(
                     }
                     value_row(
                         ui,
-                        "Available before this salary exchange",
+                        "Contribution room",
                         format_sek(allowance.available_contribution),
                     );
                     value_row(
@@ -1858,13 +1892,13 @@ fn salary_exchange_editor(
                     );
                     value_row(
                         ui,
-                        "Share of pension salary after exchange",
+                        "Share of pensionable salary after exchange",
                         format!("{:.2}%", allowance.contribution_share_of_basis()),
                     );
                 });
             ui.label(
                 egui::RichText::new(
-                    "Current-year main-rule estimate: total employer pension contributions may be 35% of pension salary after exchange, capped at 592 000 SEK for 2026.",
+                    "Current-year main-rule estimate: total employer pension contributions may be 35% of pensionable salary after exchange, capped at 592 000 SEK for 2026.",
                 )
                 .small()
                 .color(secondary_text()),
@@ -1897,7 +1931,7 @@ fn salary_exchange_editor(
             ui.horizontal_wrapped(|ui| {
                 ui.label(
                     egui::RichText::new(format!(
-                        "Employer pension contribution: {}",
+                        "Resulting pension contribution: {}",
                         format_sek(pension_contribution)
                     ))
                     .strong()
@@ -2008,7 +2042,7 @@ fn vacation_compensation_editor(ui: &mut egui::Ui, entry: &mut IncomeEntry, peri
             ui.add_space(5.0);
             ui.checkbox(
                 &mut vacation.included_in_pension_salary_basis,
-                "Include vacation payout in pension salary basis",
+                "Treat this vacation payout as pensionable",
             )
             .on_hover_text(
                 "Enabled by default: the ITP1-style estimate treats paid vacation compensation as pensionable when it is paid.",
@@ -2021,12 +2055,18 @@ fn vacation_compensation_editor(ui: &mut egui::Ui, entry: &mut IncomeEntry, peri
                 ));
                 let mut use_override = vacation.pension_premium_override.is_some();
                 if ui
-                    .checkbox(&mut use_override, "Use actual contribution")
+                    .checkbox(
+                        &mut use_override,
+                        "Use actual pension contribution for this vacation payout",
+                    )
                     .changed()
                 {
                     vacation.pension_premium_override = use_override.then_some(benchmark);
                 }
                 if let Some(actual) = &mut vacation.pension_premium_override {
+                    ui.label(secondary_label(
+                        "Actual pension contribution for vacation payout",
+                    ));
                     ui.add_sized(
                         [ui.available_width().min(180.0), 28.0],
                         egui::DragValue::new(actual)
@@ -2063,13 +2103,14 @@ fn date_editor(ui: &mut egui::Ui, label: &str, id: u64, date: &mut Date2026) -> 
                         });
                     let maximum = Date2026::days_in_month(date.month);
                     date.day = date.day.clamp(1, maximum);
-                    ui.add_sized(
-                        [54.0, 28.0],
-                        egui::DragValue::new(&mut date.day)
-                            .range(1..=maximum)
-                            .prefix("Day ")
-                            .speed(1.0),
-                    );
+                    egui::ComboBox::from_id_salt(("date-day", id))
+                        .selected_text(format!("Day {}", date.day))
+                        .width(64.0)
+                        .show_ui(ui, |ui| {
+                            for day in 1..=maximum {
+                                ui.selectable_value(&mut date.day, day, day.to_string());
+                            }
+                        });
                     ui.label(egui::RichText::new("2026").strong().color(secondary_text()));
                 });
             });
@@ -2131,19 +2172,44 @@ fn percentage_editor(ui: &mut egui::Ui, id: &'static str, percent: &mut u32) {
 }
 
 fn basis_points_percentage_editor(ui: &mut egui::Ui, id: &'static str, basis_points: &mut u32) {
+    exact_basis_points_percentage_editor(ui, id, basis_points, 10_000);
+}
+
+fn exact_basis_points_percentage_editor(
+    ui: &mut egui::Ui,
+    id: &'static str,
+    basis_points: &mut u32,
+    maximum_basis_points: u32,
+) {
     ui.push_id(id, |ui| {
-        let mut percent = f64::from(*basis_points) / 100.0;
+        let editor_id = ui.make_persistent_id("percentage");
+        let text_id = editor_id.with("text");
+        let mut text = ui
+            .ctx()
+            .data(|data| data.get_temp::<String>(text_id))
+            .unwrap_or_else(|| format_basis_points_percentage(*basis_points));
+
         let response = ui.add_sized(
-            [90.0, 26.0],
-            egui::DragValue::new(&mut percent)
-                .range(0.0..=100.0)
-                .suffix(" %")
-                .speed(0.05)
-                .max_decimals(2),
+            [74.0, 26.0],
+            egui::TextEdit::singleline(&mut text)
+                .id(editor_id)
+                .horizontal_align(egui::Align::RIGHT),
         );
         if response.changed() {
-            *basis_points = (percent * 100.0).round() as u32;
+            text = sanitize_percentage_text(&text);
+            if let Some(parsed) = parse_basis_points_percentage(&text) {
+                *basis_points = parsed.min(maximum_basis_points);
+                if parsed > maximum_basis_points {
+                    text = format_basis_points_percentage(*basis_points);
+                }
+            }
         }
+        if !response.has_focus() {
+            text = format_basis_points_percentage(*basis_points);
+        }
+        ui.label("%");
+
+        ui.ctx().data_mut(|data| data.insert_temp(text_id, text));
     });
 }
 
@@ -2179,7 +2245,6 @@ fn withholding_rule_text(rule: AppliedWithholding) -> String {
         AppliedWithholding::AdjustmentPercent(percent) => {
             format!("percentage jämkning at {percent}%")
         }
-        AppliedWithholding::CustomPercent(percent) => format!("custom {percent}%"),
         AppliedWithholding::None => "no preliminary withholding".to_owned(),
     }
 }
@@ -2263,7 +2328,7 @@ impl eframe::App for TaxApp {
 fn validation_message(issue: Option<IncomePlanValidationIssue>) -> String {
     match issue {
         Some(IncomePlanValidationIssue::InvalidPaymentPeriod { .. }) => {
-            "Check that each payment period ends after it starts.".to_owned()
+            "Check that each payment period's last day is on or after its first day.".to_owned()
         }
         Some(IncomePlanValidationIssue::SalaryExchangeExceedsAllowance { maximum, .. }) => format!(
             "Salary exchange exceeds the current maximum of {}. Open the income row and reduce it.",
@@ -2432,7 +2497,7 @@ fn annual_reconciliation(ui: &mut egui::Ui, calculation: Calculation) {
                     ui,
                     "Total tjänstepension contribution",
                     format!(
-                        "{} · {:.2}% of pension salary after exchange",
+                        "{} · {:.2}% of pensionable salary after exchange",
                         format_sek(calculation.employer_pension_contributions),
                         calculation.employer_pension_share_of_basis(),
                     ),
@@ -2787,7 +2852,7 @@ fn calculation_trace(
             );
             trace_line(
                 ui,
-                "Share of pension salary after exchange",
+                "Share of pensionable salary after exchange",
                 format!(
                     "{} total contributions ÷ {} pension-salary basis after exchange × 100",
                     format_sek(calculation.employer_pension_contributions),
@@ -2871,7 +2936,7 @@ fn withholding_equation(
     table: u8,
     annual_work_income: u32,
 ) -> String {
-    match estimate.rule {
+    let base = match estimate.rule {
         AppliedWithholding::ActualAmount => {
             "Actual tax withheld entered for this income row".to_owned()
         }
@@ -2908,10 +2973,15 @@ fn withholding_equation(
             "{} × percentage jämkning {percent}%",
             format_sek(estimate.gross)
         ),
-        AppliedWithholding::CustomPercent(percent) => {
-            format!("{} × custom {percent}%", format_sek(estimate.gross))
-        }
         AppliedWithholding::None => "No preliminary withholding for this income type".to_owned(),
+    };
+    if estimate.additional_withheld > 0 {
+        format!(
+            "{base} + {} voluntary extra withholding",
+            format_sek(estimate.additional_withheld),
+        )
+    } else {
+        base
     }
 }
 
@@ -3244,6 +3314,72 @@ fn format_credit(value: u32) -> String {
     }
 }
 
+fn format_basis_points_percentage(basis_points: u32) -> String {
+    let whole_percent = basis_points / 100;
+    let fractional_percent = basis_points % 100;
+    match fractional_percent {
+        0 => whole_percent.to_string(),
+        fraction if fraction.is_multiple_of(10) => {
+            format!("{whole_percent}.{}", fraction / 10)
+        }
+        fraction => format!("{whole_percent}.{fraction:02}"),
+    }
+}
+
+fn parse_basis_points_percentage(text: &str) -> Option<u32> {
+    let normalized = text.replace(',', ".");
+    let mut parts = normalized.split('.');
+    let whole_text = parts.next().unwrap_or_default();
+    let fractional_text = parts.next().unwrap_or_default();
+    if parts.next().is_some()
+        || fractional_text.len() > 2
+        || !whole_text
+            .chars()
+            .all(|character| character.is_ascii_digit())
+        || !fractional_text
+            .chars()
+            .all(|character| character.is_ascii_digit())
+    {
+        return None;
+    }
+
+    let whole_percent = if whole_text.is_empty() {
+        0
+    } else {
+        whole_text.parse::<u64>().ok()?
+    };
+    let fractional_basis_points = match fractional_text.len() {
+        0 => 0,
+        1 => fractional_text.parse::<u64>().ok()? * 10,
+        2 => fractional_text.parse::<u64>().ok()?,
+        _ => return None,
+    };
+    let total = whole_percent
+        .checked_mul(100)?
+        .checked_add(fractional_basis_points)?;
+    u32::try_from(total).ok()
+}
+
+fn sanitize_percentage_text(input: &str) -> String {
+    let mut output = String::with_capacity(input.len());
+    let mut has_separator = false;
+    let mut fractional_digits = 0;
+    for character in input.chars() {
+        if character.is_ascii_digit() {
+            if !has_separator || fractional_digits < 2 {
+                output.push(character);
+                if has_separator {
+                    fractional_digits += 1;
+                }
+            }
+        } else if matches!(character, '.' | ',') && !has_separator {
+            output.push('.');
+            has_separator = true;
+        }
+    }
+    output
+}
+
 fn format_sek(value: u32) -> String {
     format!("{} SEK", grouped_digits(value))
 }
@@ -3381,5 +3517,17 @@ mod tests {
             tax_balance_summary(TaxBalance::Refund(350)),
             "Expected balance: +350 SEK · Tax refund"
         );
+    }
+
+    #[test]
+    fn basis_point_percentages_use_exact_text_conversion() {
+        assert_eq!(format_basis_points_percentage(0), "0");
+        assert_eq!(format_basis_points_percentage(570), "5.7");
+        assert_eq!(format_basis_points_percentage(576), "5.76");
+        assert_eq!(parse_basis_points_percentage("5.76"), Some(576));
+        assert_eq!(parse_basis_points_percentage(",5"), Some(50));
+        assert_eq!(parse_basis_points_percentage("5."), Some(500));
+        assert_eq!(parse_basis_points_percentage("5.123"), None);
+        assert_eq!(parse_basis_points_percentage("42949673"), None);
     }
 }

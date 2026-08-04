@@ -72,7 +72,7 @@ impl IncomeKind {
             Self::OneTimeSalary => "One-time salary / termination payment",
             Self::MonthlyOccupationalPension => "Tjänstepension — monthly over a period",
             Self::AnnualOccupationalPension => "Tjänstepension — annual total",
-            Self::OwnCompanyDividend => "Dividend from own AB — 20% within gränsbelopp",
+            Self::OwnCompanyDividend => "Dividend from own AB",
         }
     }
 
@@ -253,7 +253,8 @@ pub struct IncomeEntry {
     /// Use this recurring salary's full-year projection as the income basis
     /// behind a percentage jämkning decision.
     pub use_full_year_projection_as_adjustment_basis: bool,
-    pub custom_withholding_percent: Option<u32>,
+    /// Voluntary extra tax requested from the payer for each payment.
+    pub additional_withholding_per_payment: Option<u32>,
     /// Total tax actually withheld for this income row. When present, this
     /// takes precedence over every estimated withholding rule.
     #[serde(default)]
@@ -282,7 +283,7 @@ impl IncomeEntry {
             own_company_sourced: false,
             adjustment_applies: false,
             use_full_year_projection_as_adjustment_basis: false,
-            custom_withholding_percent: None,
+            additional_withholding_per_payment: None,
             actual_withholding: None,
             vacation_compensation: None,
             regular_pension_premium,
@@ -321,6 +322,7 @@ impl IncomeEntry {
         }
         if kind.is_dividend() {
             self.adjustment_applies = false;
+            self.additional_withholding_per_payment = None;
         } else if previous_kind.is_dividend() && self.payer_role == PayerRole::Main {
             self.adjustment_applies = adjustment_available;
         }
@@ -340,11 +342,11 @@ impl IncomeEntry {
             adjustment_available && payer_role == PayerRole::Main && !self.kind.is_dividend();
     }
 
-    pub fn set_custom_withholding_enabled(&mut self, enabled: bool) {
-        if enabled == self.custom_withholding_percent.is_some() {
+    pub fn set_additional_withholding_enabled(&mut self, enabled: bool) {
+        if enabled == self.additional_withholding_per_payment.is_some() {
             return;
         }
-        self.custom_withholding_percent = enabled.then_some(30);
+        self.additional_withholding_per_payment = enabled.then_some(1_000);
     }
 
     pub fn set_actual_withholding_enabled(&mut self, enabled: bool) {
@@ -362,6 +364,26 @@ impl IncomeEntry {
         } else {
             self.amount
         }
+    }
+
+    pub fn withholding_payment_count(&self) -> u32 {
+        match self.kind {
+            IncomeKind::AnnualSalary | IncomeKind::AnnualOccupationalPension => 12,
+            IncomeKind::MonthlySalary | IncomeKind::MonthlyOccupationalPension
+                if self.start.clamped() <= self.end.clamped() =>
+            {
+                u32::from(self.end.clamped().month - self.start.clamped().month + 1)
+            }
+            IncomeKind::OneTimeSalary => 1,
+            IncomeKind::OwnCompanyDividend => 0,
+            _ => 0,
+        }
+    }
+
+    pub fn requested_additional_withholding(&self) -> u32 {
+        self.additional_withholding_per_payment
+            .unwrap_or(0)
+            .saturating_mul(self.withholding_payment_count())
     }
 
     pub fn amount_for_month(&self, month: u8) -> u32 {
@@ -572,7 +594,7 @@ impl VacationCompensation {
         let numerator = u64::from(monthly_salary)
             .saturating_mul(u64::from(self.payout_days))
             .saturating_mul(NUMERATOR_PER_DAY);
-        ((numerator + DENOMINATOR / 2) / DENOMINATOR).min(u64::from(u32::MAX)) as u32
+        (numerator.saturating_add(DENOMINATOR / 2) / DENOMINATOR).min(u64::from(u32::MAX)) as u32
     }
 
     pub fn amount_per_day(monthly_salary: u32) -> f64 {
@@ -693,7 +715,7 @@ impl IncomePlan {
         };
         if entry.payer_role != PayerRole::Main
             || entry.adjustment_applies
-            || entry.custom_withholding_percent.is_some()
+            || entry.additional_withholding_per_payment.is_some()
             || entry.actual_withholding.is_some()
             || entry.vacation_compensation_amount() > 0
         {
@@ -796,7 +818,7 @@ impl IncomePlan {
         let mut total = 0_u32;
         for entry in &self.entries {
             let gross = entry.total_annual_amount();
-            let (withheld, regular_withheld, supplemental_withheld, rule) =
+            let (withheld, regular_withheld, supplemental_withheld, additional_withheld, rule) =
                 self.entry_withholding(entry, gross, totals, table, age_group);
             total = total.saturating_add(withheld);
             entries.push(EntryWithholding {
@@ -805,6 +827,7 @@ impl IncomePlan {
                 withheld,
                 regular_withheld,
                 supplemental_withheld,
+                additional_withheld,
                 rule,
             });
         }
@@ -818,22 +841,35 @@ impl IncomePlan {
         totals: IncomePlanTotals,
         table: u8,
         age_group: TaxAgeGroup,
-    ) -> (u32, u32, u32, AppliedWithholding) {
+    ) -> (u32, u32, u32, u32, AppliedWithholding) {
         if let Some(withheld) = entry.actual_withholding {
-            return (withheld, withheld, 0, AppliedWithholding::ActualAmount);
+            return (withheld, withheld, 0, 0, AppliedWithholding::ActualAmount);
         }
         if entry.kind.is_dividend() {
-            return (0, 0, 0, AppliedWithholding::None);
+            return (0, 0, 0, 0, AppliedWithholding::None);
         }
-        if let Some(percent) = entry.custom_withholding_percent {
-            let withheld = percentage(gross, percent);
-            return (
-                withheld,
-                withheld,
-                0,
-                AppliedWithholding::CustomPercent(percent),
-            );
-        }
+        let (base, regular_withheld, supplemental_withheld, rule) =
+            self.base_entry_withholding(entry, gross, totals, table, age_group);
+        let additional_withheld = entry
+            .requested_additional_withholding()
+            .min(gross.saturating_sub(base));
+        (
+            base.saturating_add(additional_withheld),
+            regular_withheld,
+            supplemental_withheld,
+            additional_withheld,
+            rule,
+        )
+    }
+
+    fn base_entry_withholding(
+        &self,
+        entry: &IncomeEntry,
+        gross: u32,
+        totals: IncomePlanTotals,
+        table: u8,
+        age_group: TaxAgeGroup,
+    ) -> (u32, u32, u32, AppliedWithholding) {
         if entry.adjustment_applies {
             if let Some(percent) = self.adjustment_percent {
                 let withheld = percentage(gross, percent);
@@ -1042,7 +1078,6 @@ pub enum AppliedWithholding {
     OneTimeTable(u32),
     Secondary30,
     AdjustmentPercent(u32),
-    CustomPercent(u32),
     None,
 }
 
@@ -1053,6 +1088,7 @@ pub struct EntryWithholding {
     pub withheld: u32,
     pub regular_withheld: u32,
     pub supplemental_withheld: u32,
+    pub additional_withheld: u32,
     pub rule: AppliedWithholding,
 }
 
@@ -1316,6 +1352,18 @@ mod tests {
     }
 
     #[test]
+    fn vacation_compensation_saturates_at_numeric_limits() {
+        let vacation = VacationCompensation {
+            annual_entitlement_days: u32::MAX,
+            payout_days: u32::MAX,
+            included_in_pension_salary_basis: true,
+            pension_premium_override: None,
+        };
+
+        assert_eq!(vacation.amount(u32::MAX), u32::MAX);
+    }
+
+    #[test]
     fn same_year_vacation_compensation_is_suggested_but_days_remain_editable() {
         let mut entry = IncomeEntry::new(1, IncomeKind::MonthlySalary);
         entry.amount = 93_000;
@@ -1382,7 +1430,7 @@ mod tests {
         plan.entries[0].description = "Existing salary".to_owned();
         plan.entries[0].payer_role = PayerRole::Secondary;
         plan.entries[0].adjustment_applies = true;
-        plan.entries[0].custom_withholding_percent = Some(37);
+        plan.entries[0].additional_withholding_per_payment = Some(3_700);
         let existing = plan.entries[0].clone();
 
         plan.add_entry(IncomeKind::MonthlySalary);
@@ -1501,14 +1549,14 @@ mod tests {
     }
 
     #[test]
-    fn custom_withholding_editor_default_comes_from_the_income_entry() {
+    fn additional_withholding_editor_default_comes_from_the_income_entry() {
         let mut entry = IncomeEntry::new(1, IncomeKind::AnnualSalary);
 
-        entry.set_custom_withholding_enabled(true);
-        assert_eq!(entry.custom_withholding_percent, Some(30));
+        entry.set_additional_withholding_enabled(true);
+        assert_eq!(entry.additional_withholding_per_payment, Some(1_000));
 
-        entry.set_custom_withholding_enabled(false);
-        assert_eq!(entry.custom_withholding_percent, None);
+        entry.set_additional_withholding_enabled(false);
+        assert_eq!(entry.additional_withholding_per_payment, None);
     }
 
     #[test]
@@ -1595,7 +1643,7 @@ mod tests {
     }
 
     #[test]
-    fn default_and_adjusted_withholding_follow_precedence() {
+    fn withholding_rules_and_additional_amount_compose() {
         let mut plan = IncomePlan::with_annual_salary(700_000);
         let secondary_id = plan.add_entry(IncomeKind::AnnualOccupationalPension);
         let secondary = plan
@@ -1634,15 +1682,16 @@ mod tests {
             .iter_mut()
             .find(|entry| entry.id == secondary_id)
             .unwrap()
-            .custom_withholding_percent = Some(42);
+            .additional_withholding_per_payment = Some(500);
         let summary = plan.estimated_withholding(32, TaxAgeGroup::Under66AtYearStart);
         let pension = summary
             .entries
             .iter()
             .find(|entry| entry.entry_id == secondary_id)
             .unwrap();
-        assert_eq!(pension.withheld, 42_000);
-        assert_eq!(pension.rule, AppliedWithholding::CustomPercent(42));
+        assert_eq!(pension.withheld, 44_000);
+        assert_eq!(pension.additional_withheld, 6_000);
+        assert_eq!(pension.rule, AppliedWithholding::AdjustmentPercent(38));
     }
 
     #[test]
@@ -1660,7 +1709,7 @@ mod tests {
                 .unwrap();
             entry.amount = 100_000;
             entry.adjustment_applies = true;
-            entry.custom_withholding_percent = Some(42);
+            entry.additional_withholding_per_payment = Some(42);
             let actual = (index as u32 + 1) * 1_000;
             entry.actual_withholding = Some(actual);
             expected_total = expected_total.saturating_add(actual);
@@ -1673,7 +1722,32 @@ mod tests {
         assert!(summary.entries.iter().enumerate().all(|(index, entry)| {
             entry.rule == AppliedWithholding::ActualAmount
                 && entry.withheld == (index as u32 + 1) * 1_000
+                && entry.additional_withheld == 0
         }));
+    }
+
+    #[test]
+    fn additional_withholding_uses_payment_count_and_cannot_exceed_gross() {
+        let mut plan = IncomePlan::with_monthly_salary(10_000);
+        plan.entries[0].start = Date2026::new(3, 15);
+        plan.entries[0].end = Date2026::new(5, 1);
+        plan.entries[0].additional_withholding_per_payment = Some(1_000);
+
+        let estimate = plan
+            .estimated_withholding(32, TaxAgeGroup::Under66AtYearStart)
+            .entries[0];
+        assert_eq!(plan.entries[0].withholding_payment_count(), 3);
+        assert_eq!(estimate.additional_withheld, 3_000);
+
+        plan.entries[0].additional_withholding_per_payment = Some(u32::MAX);
+        let estimate = plan
+            .estimated_withholding(32, TaxAgeGroup::Under66AtYearStart)
+            .entries[0];
+        assert_eq!(estimate.withheld, estimate.gross);
+        assert_eq!(
+            estimate.additional_withheld,
+            estimate.gross - estimate.regular_withheld
+        );
     }
 
     #[test]

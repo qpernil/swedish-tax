@@ -320,4 +320,101 @@ mod tests {
             DividendAllowanceIssue::PersonalSalaryExceedsCompanyPayroll
         );
     }
+
+    #[test]
+    fn ownership_allocation_follows_skatteverket_worked_examples() {
+        let half = DividendAllowanceInputs2027 {
+            ownership_basis_points: 5_000,
+            ..Default::default()
+        }
+        .calculate(0)
+        .unwrap();
+        assert_eq!(half.basic_amount, 166_800);
+
+        let across_companies = DividendAllowanceInputs2027 {
+            ownership_basis_points: 2_500,
+            other_qualified_ownership_basis_points: 3_300,
+            ..Default::default()
+        }
+        .calculate(0)
+        .unwrap();
+        assert_eq!(across_companies.basic_amount, 83_400);
+
+        let broadly_allocated = DividendAllowanceInputs2027 {
+            ownership_basis_points: 2_500,
+            other_qualified_ownership_basis_points: 17_500,
+            ..Default::default()
+        }
+        .calculate(0)
+        .unwrap();
+        assert_eq!(broadly_allocated.basic_amount, 41_700);
+    }
+
+    #[test]
+    fn wage_allowance_follows_skatteverket_worked_examples() {
+        let agnes = DividendAllowanceInputs2027 {
+            one_person_company: false,
+            ownership_basis_points: 7_000,
+            company_cash_payroll_2026: 4_000_000,
+            ..Default::default()
+        };
+        let result = agnes.calculate(400_000).unwrap();
+        assert_eq!(result.joint_wage_basis, 2_800_000);
+        assert_eq!(result.joint_wage_basis_after_deduction, 2_132_800);
+        assert_eq!(result.wage_allowance, 1_066_400);
+
+        let result = DividendAllowanceInputs2027 {
+            ownership_basis_points: 3_000,
+            ..agnes
+        }
+        .calculate(300_000)
+        .unwrap();
+        assert_eq!(result.joint_wage_basis, 1_200_000);
+        assert_eq!(result.joint_wage_basis_after_deduction, 532_800);
+        assert_eq!(result.wage_allowance, 266_400);
+
+        let amy = DividendAllowanceInputs2027 {
+            ownership_basis_points: 6_000,
+            spouse_ownership_basis_points: 4_000,
+            highest_related_cash_salary_2026: 300_000,
+            ..agnes
+        };
+        assert_eq!(amy.calculate(500_000).unwrap().wage_allowance, 999_840);
+        let gedion = DividendAllowanceInputs2027 {
+            ownership_basis_points: 4_000,
+            spouse_ownership_basis_points: 6_000,
+            highest_related_cash_salary_2026: 500_000,
+            ..agnes
+        };
+        assert_eq!(gedion.calculate(300_000).unwrap().wage_allowance, 666_560);
+    }
+
+    #[test]
+    fn total_allowance_follows_skatteverket_valter_and_helle_examples() {
+        let valter = DividendAllowanceInputs2027 {
+            one_person_company: false,
+            company_cash_payroll_2026: 1_000_000,
+            acquisition_cost: 25_000,
+            saved_allowance: 750_000,
+            ..Default::default()
+        }
+        .calculate(600_000)
+        .unwrap();
+        assert_eq!(valter.basic_amount, 333_600);
+        assert_eq!(valter.wage_allowance, 166_400);
+        assert_eq!(valter.acquisition_cost_interest, 0);
+        assert_eq!(valter.total, 1_250_000);
+        assert_eq!(valter.tax_at_twenty_percent(), 250_000);
+        assert_eq!(valter.net_after_twenty_percent_tax(), 1_000_000);
+
+        let helle = DividendAllowanceInputs2027 {
+            acquisition_cost: 250_000,
+            acquisition_cost_interest_basis_points: Some(1_155),
+            ..Default::default()
+        }
+        .calculate(0)
+        .unwrap();
+        assert_eq!(helle.acquisition_cost_interest_basis, 150_000);
+        assert_eq!(helle.acquisition_cost_interest, 17_325);
+    }
 }

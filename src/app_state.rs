@@ -51,6 +51,7 @@ mod tests {
         plan.entries[0].adjustment_applies = true;
         plan.entries[0].own_company_sourced = true;
         plan.entries[0].actual_withholding = Some(271_234);
+        plan.entries[0].additional_withholding_per_payment = Some(1_500);
         plan.dividend_allowance.one_person_company = false;
         plan.dividend_allowance.company_cash_payroll_2026 = 4_000_000;
         let pension_id = plan.add_entry(IncomeKind::MonthlyOccupationalPension);
