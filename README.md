@@ -51,6 +51,27 @@ cargo run -p swedish-tax-gui
 The GUI is a separate workspace package. A normal `cargo build` from the
 repository root builds both the core/CLI package and the graphical application.
 
+## iOS bridge
+
+The `swedish-tax-ios` workspace crate exposes the tax core through a versioned,
+typed C ABI. Build ARM64 device and Apple Silicon simulator slices and package
+them as an XCFramework with:
+
+```sh
+rustup target add aarch64-apple-ios aarch64-apple-ios-sim
+cargo xtask ios --release
+```
+
+The task first regenerates `ios-ffi/include/SwedishTaxFFI.h` from the public
+`#[repr(C)]` Rust types and `extern "C"` functions using its pinned `cbindgen`
+library dependency. The generated header is checked in for review and Swift
+module import; `cargo test --workspace` fails if it drifts from the Rust ABI.
+
+The default artifact is `target/ios/SwedishTaxCore.xcframework`. The iOS Xcode
+project consumes that location through its persisted
+`RUST_CORE_ARTIFACTS_DIR` build setting; `--output PATH` remains available for
+other consumers and packaging workflows.
+
 ## Sources
 
 - [SKV 433 technical specification](https://www.skatteverket.se/download/18.1522bf3f19aea8075ba55c/1766385913260/teknisk-beskrivning-skv-433-2026-utgava-36.pdf)

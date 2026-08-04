@@ -1,0 +1,28 @@
+language = "C"
+include_guard = "SWEDISH_TAX_FFI_H"
+autogen_warning = "/* Generated from ios-ffi Rust sources by cbindgen. Do not edit manually. */"
+cpp_compat = true
+style = "both"
+sort_by = "None"
+usize_is_size_t = true
+documentation = true
+documentation_style = "c99"
+
+[parse]
+parse_deps = false
+
+[export]
+include = [
+  "SWEDISH_TAX_STATUS_OK",
+  "SWEDISH_TAX_STATUS_INVALID_INPUT",
+  "SWEDISH_TAX_STATUS_INTERNAL_ERROR",
+  "SWEDISH_TAX_DEDUCTION_AMOUNT",
+  "SWEDISH_TAX_DEDUCTION_PERCENT",
+]
+
+[fn]
+rename_args = "None"
+sort_by = "None"
+
+[struct]
+rename_fields = "None"
