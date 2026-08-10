@@ -1,5 +1,7 @@
 # Swedish tax calculations for 2026
 
+[![CI](https://github.com/qpernil/swedish-tax/actions/workflows/ci.yml/badge.svg)](https://github.com/qpernil/swedish-tax/actions/workflows/ci.yml)
+
 This crate implements Skatteverket monthly tax tables 29 through 42 and the
 annual preliminary-tax formulas from SKV 433, edition 36, for income year 2026.
 
@@ -85,3 +87,8 @@ other consumers and packaging workflows.
 - [Employer pension-cost deduction rules](https://www4.skatteverket.se/rattsligvagledning/edition/2026.3/339021.html)
 - [Changed 3:12 rules for income year 2026](https://www.skatteverket.se/foretag/drivaforetag/foretagsformer/famansforetag/andradereglerfordelagareifamansforetaginforinkomstdeklarationen2027.4.4a54dc8b19aa6175a152359.html)
 - [2026 income-base amount used by the preliminary 2027 estimate](https://www.skatteverket.se/privat/skatter/beloppochprocent/2026/beloppochprocent2026kortversion.4.1522bf3f19aea8075ba89.html)
+
+## Contributing and license
+
+Development instructions are in [CONTRIBUTING.md](CONTRIBUTING.md). This
+project is available under the [MIT License](LICENSE).

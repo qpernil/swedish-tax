@@ -1,7 +1,7 @@
 use crate::{
-    annual_tax_for_income_profile, estimated_sgi_progress_for_income, monthly_deduction,
-    public_pension_progress_for_income, AnnualIncomeProfile, AnnualTax, IncomeBasisEstimate,
-    IncomePlan, TaxAgeGroup, TaxDeduction, QUALIFIED_DIVIDEND_TAX_PERCENT,
+    AnnualIncomeProfile, AnnualTax, IncomeBasisEstimate, IncomePlan,
+    QUALIFIED_DIVIDEND_TAX_PERCENT, TaxAgeGroup, TaxDeduction, annual_tax_for_income_profile,
+    estimated_sgi_progress_for_income, monthly_deduction, public_pension_progress_for_income,
 };
 
 /// Default monthly salary used by the GUI. It is the highest whole monthly
@@ -219,7 +219,7 @@ fn percentage(amount: u32, percent: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Date2026, IncomeKind, PayerRole, MAX_TAX_TABLE, MIN_TAX_TABLE};
+    use crate::{Date2026, IncomeKind, MAX_TAX_TABLE, MIN_TAX_TABLE, PayerRole};
 
     #[test]
     fn full_year_adjustment_basis_calibrates_the_partial_year_projection() {

@@ -1,8 +1,8 @@
-use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use swedish_tax::{
-    annual_tax, annual_tax_for_income_profile, monthly_deduction, AnnualIncomeProfile, AnnualTax,
-    TaxAgeGroup, TaxColumn, TaxDeduction,
+    AnnualIncomeProfile, AnnualTax, TaxAgeGroup, TaxColumn, TaxDeduction, annual_tax,
+    annual_tax_for_income_profile, monthly_deduction,
 };
 
 mod plan;
@@ -116,7 +116,7 @@ impl SwedishTaxDeductionResult {
 ///
 /// `column` uses the public one-based tax-table column numbers 1 through 6.
 /// No Rust panic is allowed to unwind across the C boundary.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn swedish_tax_monthly_deduction(
     table: u32,
     column: u32,
@@ -151,7 +151,7 @@ pub extern "C" fn swedish_tax_monthly_deduction(
     .unwrap_or_else(|_| SwedishTaxDeductionResult::internal_error())
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn swedish_tax_annual_tax(
     table: u32,
     column: u32,
@@ -168,7 +168,7 @@ pub extern "C" fn swedish_tax_annual_tax(
     .unwrap_or_else(|_| SwedishTaxAnnualTaxResult::error(STATUS_INTERNAL_ERROR))
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn swedish_tax_annual_tax_for_income_profile(
     table: u32,
     age_group: u32,

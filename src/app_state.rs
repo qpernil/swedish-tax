@@ -1,4 +1,4 @@
-use crate::{IncomePlan, TaxAgeGroup, DEFAULT_MONTHLY_INCOME, MAX_TAX_TABLE, MIN_TAX_TABLE};
+use crate::{DEFAULT_MONTHLY_INCOME, IncomePlan, MAX_TAX_TABLE, MIN_TAX_TABLE, TaxAgeGroup};
 
 pub const PERSISTED_APP_STATE_VERSION: u32 = 1;
 

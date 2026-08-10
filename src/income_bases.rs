@@ -4,7 +4,7 @@
 //! Försäkringskassan. The SGI result is only an estimate; Försäkringskassan
 //! determines an individual's SGI when a qualifying benefit is claimed.
 
-use crate::{pension_fee, round_down_hundred, TaxColumn};
+use crate::{TaxColumn, pension_fee, round_down_hundred};
 
 /// Lowest 2026 annual income that can produce pensionable income (PGI).
 pub const MINIMUM_PENSIONABLE_INCOME: u32 = 25_042;

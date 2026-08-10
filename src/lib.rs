@@ -22,33 +22,34 @@ mod income_bases;
 mod income_plan;
 mod withholding;
 
-pub use app_state::{PersistedAppState, PERSISTED_APP_STATE_VERSION};
+pub use app_state::{PERSISTED_APP_STATE_VERSION, PersistedAppState};
 pub use calculation::{
-    AdjustmentBalanceTrace, AdjustmentCalibration, Calculation, TaxBalance, DEFAULT_MONTHLY_INCOME,
-    DIVIDEND_TAX_PERCENT,
+    AdjustmentBalanceTrace, AdjustmentCalibration, Calculation, DEFAULT_MONTHLY_INCOME,
+    DIVIDEND_TAX_PERCENT, TaxBalance,
 };
 
 pub use dividend_allowance::{
-    DividendAllowance2027, DividendAllowanceInputs2027, DividendAllowanceIssue,
     DIVIDEND_ACQUISITION_COST_THRESHOLD, DIVIDEND_BASIC_AMOUNT_2027,
     DIVIDEND_WAGE_ALLOWANCE_PERCENT, DIVIDEND_WAGE_CAP_MULTIPLIER, DIVIDEND_WAGE_DEDUCTION_2027,
+    DividendAllowance2027, DividendAllowanceInputs2027, DividendAllowanceIssue,
     QUALIFIED_DIVIDEND_TAX_PERCENT,
 };
 
 pub use income_bases::{
+    GENERAL_PENSION_FEE_INCOME_CEILING, IncomeBasisEstimate, IncomeBasisProgress,
+    MAXIMUM_PENSIONABLE_INCOME, MAXIMUM_SGI, MINIMUM_PENSIONABLE_INCOME, MINIMUM_SGI_INCOME,
     estimated_sgi_progress, estimated_sgi_progress_for_income, public_pension_progress,
-    public_pension_progress_for_income, IncomeBasisEstimate, IncomeBasisProgress,
-    GENERAL_PENSION_FEE_INCOME_CEILING, MAXIMUM_PENSIONABLE_INCOME, MAXIMUM_SGI,
-    MINIMUM_PENSIONABLE_INCOME, MINIMUM_SGI_INCOME,
+    public_pension_progress_for_income,
 };
 pub use income_plan::{
-    AppliedWithholding, Date2026, EntryWithholding, IncomeEntry, IncomeKind, IncomePlan,
-    IncomePlanTotals, IncomePlanValidationIssue, IncomeTaxCategory, PayerRole,
-    RegularPensionPremium, SalaryExchange, SalaryExchangeAllowance, SalaryExchangeContext,
-    VacationCompensation, WithholdingSummary, DEFAULT_SALARY_EXCHANGE_UPLIFT_BASIS_POINTS,
+    AppliedWithholding, DEFAULT_SALARY_EXCHANGE_UPLIFT_BASIS_POINTS, Date2026,
     EMPLOYER_PENSION_ALLOWANCE_MAXIMUM, EMPLOYER_PENSION_ALLOWANCE_RATE_BASIS_POINTS,
+    EntryWithholding, IncomeEntry, IncomeKind, IncomePlan, IncomePlanTotals,
+    IncomePlanValidationIssue, IncomeTaxCategory, PayerRole,
     REGULAR_PENSION_LOWER_RATE_BASIS_POINTS, REGULAR_PENSION_MONTHLY_THRESHOLD,
-    REGULAR_PENSION_UPPER_RATE_BASIS_POINTS, SECONDARY_WITHHOLDING_PERCENT,
+    REGULAR_PENSION_UPPER_RATE_BASIS_POINTS, RegularPensionPremium, SECONDARY_WITHHOLDING_PERCENT,
+    SalaryExchange, SalaryExchangeAllowance, SalaryExchangeContext, VacationCompensation,
+    WithholdingSummary,
 };
 pub use withholding::one_time_withholding_rate;
 

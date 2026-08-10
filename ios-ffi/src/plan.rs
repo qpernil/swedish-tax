@@ -6,7 +6,7 @@ use swedish_tax::{
     SalaryExchange, TaxAgeGroup, TaxDeduction, VacationCompensation,
 };
 
-use super::{SwedishTaxAnnualTaxResult, STATUS_INTERNAL_ERROR, STATUS_INVALID_INPUT, STATUS_OK};
+use super::{STATUS_INTERNAL_ERROR, STATUS_INVALID_INPUT, STATUS_OK, SwedishTaxAnnualTaxResult};
 
 const CONTRACT_VERSION: u32 = 1;
 
@@ -348,12 +348,12 @@ impl SwedishTaxCalculationResult {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn swedish_tax_contract_version() -> u32 {
     CONTRACT_VERSION
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn swedish_tax_calculate_plan(
     request: *const SwedishTaxPlanRequest,
 ) -> SwedishTaxCalculationResult {
@@ -471,7 +471,7 @@ fn calculate(request: SwedishTaxPlanRequest) -> Option<SwedishTaxCalculationResu
     })
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn swedish_tax_calculation_result_free(result: SwedishTaxCalculationResult) {
     if result.withholding_entries.is_null() {
         return;

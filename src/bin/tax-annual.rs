@@ -1,5 +1,5 @@
 use std::{env, process::ExitCode};
-use swedish_tax::{annual_tax, TaxColumn};
+use swedish_tax::{TaxColumn, annual_tax};
 
 fn parse_column(value: &str) -> Result<TaxColumn, String> {
     match value {
