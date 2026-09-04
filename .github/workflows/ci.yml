@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -30,14 +30,17 @@ jobs:
         run: cargo test --workspace
 
   msrv:
-    name: Minimum Rust 1.92
+    name: Minimum Rust 1.94
     runs-on: ubuntu-latest
+    env:
+      RUSTUP_TOOLCHAIN: "1.94"
+
     steps:
       - name: Check out repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Install minimum supported Rust
-        uses: dtolnay/rust-toolchain@1.92
+        uses: dtolnay/rust-toolchain@1.94
 
       - name: Check workspace
         run: cargo check --workspace --all-targets
