@@ -82,6 +82,15 @@ project consumes that location through its persisted
 `RUST_CORE_ARTIFACTS_DIR` build setting; `--output PATH` remains available for
 other consumers and packaging workflows.
 
+## Planned WebAssembly bridge
+
+The browser version will use this crate as its calculation engine through a
+dedicated `wasm-bindgen` adapter. Calculations will continue to run locally in
+the browser while the Rust core remains the single source of business rules.
+The versioned contract, build pipeline, verification strategy, and staged
+ASP.NET migration are documented in the
+[WebAssembly engine plan](docs/webassembly-engine-plan.md).
+
 ## Sources
 
 - [SKV 433 technical specification](https://www.skatteverket.se/download/18.1522bf3f19aea8075ba55c/1766385913260/teknisk-beskrivning-skv-433-2026-utgava-36.pdf)
