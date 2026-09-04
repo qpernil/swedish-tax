@@ -15,6 +15,19 @@ fn exact_date_monthly_income_prorates_partial_months() {
 }
 
 #[test]
+fn annual_daily_rate_is_optional_and_keeps_full_months_unchanged() {
+    let mut entry = IncomeEntry::new(1, IncomeKind::MonthlySalary);
+    entry.amount = 93_000;
+    entry.start = Date2026::new(1, 1);
+    entry.end = Date2026::new(10, 18);
+    entry.use_annual_daily_rate_for_partial_months = true;
+
+    assert_eq!(entry.amount_for_month(9), 93_000);
+    assert_eq!(entry.amount_for_month(10), 55_036);
+    assert_eq!(entry.annual_amount(), 892_036);
+}
+
+#[test]
 fn adjustment_basis_projects_recurring_salary_over_the_full_year() {
     let mut plan = IncomePlan::with_monthly_salary(93_000);
     plan.entries[0].end = Date2026::new(10, 18);
@@ -60,13 +73,13 @@ fn salary_exchange_uses_remaining_pension_allowance_and_uplift() {
     lump.salary_exchange = Some(SalaryExchange::new());
 
     let allowance = plan.salary_exchange_allowance(lump_id).unwrap();
-    assert_eq!(allowance.pension_salary_basis_before, 1_006_883);
-    assert_eq!(allowance.pension_salary_basis_after, 1_006_883);
-    assert_eq!(allowance.ceiling, 352_409);
+    assert_eq!(allowance.pension_salary_basis_before, 1_011_528);
+    assert_eq!(allowance.pension_salary_basis_after, 1_011_528);
+    assert_eq!(allowance.ceiling, 354_034);
     assert_eq!(allowance.regular_pension_premiums, 139_954);
-    assert_eq!(allowance.vacation_pension_premiums, 34_765);
-    assert_eq!(allowance.available_contribution, 177_690);
-    assert_eq!(allowance.maximum_sacrifice, 168_012);
+    assert_eq!(allowance.vacation_pension_premiums, 36_159);
+    assert_eq!(allowance.available_contribution, 177_921);
+    assert_eq!(allowance.maximum_sacrifice, 168_231);
 
     plan.entries
         .iter_mut()
@@ -82,7 +95,7 @@ fn salary_exchange_uses_remaining_pension_allowance_and_uplift() {
         partial_totals.salary_exchange_pension_contributions,
         105_760
     );
-    assert_eq!(partial_totals.work_income, 1_278_883);
+    assert_eq!(partial_totals.work_income, 1_283_528);
 
     plan.entries
         .iter_mut()
@@ -94,23 +107,63 @@ fn salary_exchange_uses_remaining_pension_allowance_and_uplift() {
         .sacrificed_salary = allowance.maximum_sacrifice;
 
     let totals = plan.totals();
-    assert_eq!(totals.work_income, 1_210_871);
-    assert_eq!(totals.salary_exchange_sacrifice, 168_012);
-    assert_eq!(totals.salary_exchange_pension_contributions, 177_689);
-    assert_eq!(totals.total_employer_pension_contributions(), 352_408);
+    assert_eq!(totals.work_income, 1_215_297);
+    assert_eq!(totals.salary_exchange_sacrifice, 168_231);
+    assert_eq!(totals.salary_exchange_pension_contributions, 177_921);
+    assert_eq!(totals.total_employer_pension_contributions(), 354_034);
     assert_eq!(
         totals.employer_pension_share_of_basis(),
-        f64::from(352_408) * 100.0 / f64::from(1_006_883)
+        f64::from(354_034) * 100.0 / f64::from(1_011_528)
     );
     let applied_allowance = plan.salary_exchange_allowance(lump_id).unwrap();
     assert_eq!(
         applied_allowance.total_employer_pension_contributions,
-        352_408
+        354_034
     );
     assert_eq!(
         applied_allowance.contribution_share_of_basis(),
-        f64::from(352_408) * 100.0 / f64::from(1_006_883)
+        f64::from(354_034) * 100.0 / f64::from(1_011_528)
     );
+}
+
+#[test]
+fn pension_allowance_ceiling_never_rounds_above_thirty_five_percent() {
+    let basis = 1_011_528;
+    let ceiling = SalaryExchange::allowance_ceiling(basis);
+
+    assert_eq!(ceiling, 354_034);
+    assert!(u64::from(ceiling) * 10_000 <= u64::from(basis) * 3_500);
+    assert!(u64::from(ceiling + 1) * 10_000 > u64::from(basis) * 3_500);
+}
+
+#[test]
+fn previous_year_pension_salary_keeps_the_ceiling_fixed_like_yubico() {
+    let context = SalaryExchangeContext {
+        regular_pension_premiums: 158_170,
+        vacation_pension_premiums: 0,
+        other_exchange_contributions: 0,
+        other_pension_salary_basis: 0,
+    };
+    let mut exchange = SalaryExchange::new();
+    exchange.sacrificed_salary = 211_000;
+    exchange.uplift_basis_points = 580;
+    exchange.previous_year_pension_salary_basis = Some(1_092_000);
+    exchange.pension_and_insurance_costs_before_exchange = Some(158_170);
+
+    let allowance = context.allowance_for(372_000, false, exchange);
+
+    assert_eq!(
+        allowance.previous_year_pension_salary_basis,
+        Some(1_092_000)
+    );
+    assert_eq!(allowance.pension_salary_basis_before, 1_092_000);
+    assert_eq!(allowance.pension_salary_basis_after, 1_092_000);
+    assert_eq!(allowance.pension_contributions_before, 158_170);
+    assert_eq!(allowance.ceiling, 382_200);
+    assert_eq!(allowance.available_contribution, 224_030);
+    assert_eq!(allowance.maximum_sacrifice, 211_749);
+    assert_eq!(allowance.selected_exchange_contribution, 223_238);
+    assert_eq!(allowance.total_employer_pension_contributions, 381_408);
 }
 
 #[test]
@@ -177,8 +230,8 @@ fn complete_salary_vacation_lump_sum_and_maximum_exchange_scenario() {
     assert_eq!(salary.annual_amount(), 891_000);
     assert_eq!(salary.regular_pension_premium_amount(), 139_954);
     assert_eq!(salary.vacation_compensation.unwrap().payout_days, 24);
-    assert_eq!(salary.vacation_compensation_amount(), 115_883);
-    assert_eq!(salary.vacation_pension_premium_amount(), 34_765);
+    assert_eq!(salary.vacation_compensation_amount(), 120_528);
+    assert_eq!(salary.vacation_pension_premium_amount(), 36_159);
 
     let lump_id = plan.add_entry(IncomeKind::OneTimeSalary);
     let lump = plan
@@ -190,10 +243,10 @@ fn complete_salary_vacation_lump_sum_and_maximum_exchange_scenario() {
     lump.salary_exchange = Some(SalaryExchange::new());
 
     let allowance = plan.salary_exchange_allowance(lump_id).unwrap();
-    assert_eq!(allowance.pension_salary_basis_before, 1_006_883);
-    assert_eq!(allowance.ceiling, 352_409);
-    assert_eq!(allowance.available_contribution, 177_690);
-    assert_eq!(allowance.maximum_sacrifice, 168_012);
+    assert_eq!(allowance.pension_salary_basis_before, 1_011_528);
+    assert_eq!(allowance.ceiling, 354_034);
+    assert_eq!(allowance.available_contribution, 177_921);
+    assert_eq!(allowance.maximum_sacrifice, 168_231);
 
     let lump = plan
         .entries
@@ -201,17 +254,17 @@ fn complete_salary_vacation_lump_sum_and_maximum_exchange_scenario() {
         .find(|entry| entry.id == lump_id)
         .unwrap();
     lump.salary_exchange.as_mut().unwrap().sacrificed_salary = allowance.maximum_sacrifice;
-    assert_eq!(lump.total_annual_amount(), 203_988);
-    assert_eq!(lump.salary_exchange_pension_contribution(), 177_689);
+    assert_eq!(lump.total_annual_amount(), 203_769);
+    assert_eq!(lump.salary_exchange_pension_contribution(), 177_921);
 
     let totals = plan.totals();
-    assert_eq!(totals.work_income, 1_210_871);
-    assert_eq!(totals.pension_salary_basis, 1_006_883);
+    assert_eq!(totals.work_income, 1_215_297);
+    assert_eq!(totals.pension_salary_basis, 1_011_528);
     assert_eq!(totals.regular_pension_premiums, 139_954);
-    assert_eq!(totals.vacation_pension_premiums, 34_765);
-    assert_eq!(totals.salary_exchange_sacrifice, 168_012);
-    assert_eq!(totals.salary_exchange_pension_contributions, 177_689);
-    assert_eq!(totals.total_employer_pension_contributions(), 352_408);
+    assert_eq!(totals.vacation_pension_premiums, 36_159);
+    assert_eq!(totals.salary_exchange_sacrifice, 168_231);
+    assert_eq!(totals.salary_exchange_pension_contributions, 177_921);
+    assert_eq!(totals.total_employer_pension_contributions(), 354_034);
 
     let mut one_krona_too_much = SalaryExchange::new();
     one_krona_too_much.sacrificed_salary = allowance.maximum_sacrifice + 1;
@@ -229,6 +282,7 @@ fn vacation_compensation_saturates_at_numeric_limits() {
     let vacation = VacationCompensation {
         annual_entitlement_days: u32::MAX,
         payout_days: u32::MAX,
+        rate_basis_points: u32::MAX,
         included_in_pension_salary_basis: true,
         pension_premium_override: None,
     };
@@ -245,13 +299,21 @@ fn same_year_vacation_compensation_is_suggested_but_days_remain_editable() {
     entry.vacation_compensation = Some(VacationCompensation::suggested(30, entry.start, entry.end));
 
     assert_eq!(entry.vacation_compensation.unwrap().payout_days, 24);
-    assert_eq!(entry.vacation_compensation_amount(), 115_883);
-    assert_eq!(entry.vacation_pension_premium_amount(), 34_765);
-    assert_eq!(entry.pension_salary_basis_amount(), 1_006_883);
-    assert_eq!(entry.total_annual_amount(), 1_006_883);
+    assert_eq!(entry.vacation_compensation.unwrap().rate_basis_points, 540);
+    assert_eq!(entry.vacation_compensation_amount(), 120_528);
+    assert_eq!(entry.vacation_pension_premium_amount(), 36_159);
+    assert_eq!(entry.pension_salary_basis_amount(), 1_011_528);
+    assert_eq!(entry.total_annual_amount(), 1_011_528);
 
     entry.vacation_compensation.as_mut().unwrap().payout_days = 20;
-    assert_eq!(entry.vacation_compensation_amount(), 96_569);
+    assert_eq!(entry.vacation_compensation_amount(), 100_440);
+
+    entry
+        .vacation_compensation
+        .as_mut()
+        .unwrap()
+        .rate_basis_points = 500;
+    assert_eq!(entry.vacation_compensation_amount(), 93_000);
 }
 
 #[test]
@@ -285,7 +347,7 @@ fn vacation_compensation_adds_pgi_and_one_time_withholding_but_not_sgi() {
     ));
 
     let totals = plan.totals();
-    assert_eq!(totals.work_income, 1_006_883);
+    assert_eq!(totals.work_income, 1_011_528);
     assert_eq!(totals.sgi_annual_rate, 1_116_000);
 
     let withholding = plan.estimated_withholding(32, TaxAgeGroup::Under66AtYearStart);

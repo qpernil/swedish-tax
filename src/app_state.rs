@@ -41,7 +41,9 @@ impl Default for PersistedAppState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Date2026, IncomeKind};
+    use crate::{
+        DEFAULT_VACATION_COMPENSATION_RATE_BASIS_POINTS, Date2026, IncomeKind, VacationCompensation,
+    };
 
     #[test]
     fn complete_app_state_round_trips_through_serde() {
@@ -86,6 +88,7 @@ mod tests {
         let legacy = encoded
             .replace("own_company_sourced:false,", "")
             .replace("actual_withholding:None,", "")
+            .replace("use_annual_daily_rate_for_partial_months:false,", "")
             .replace(
                 "dividend_allowance:(one_person_company:true,ownership_basis_points:10000,other_qualified_ownership_basis_points:0,spouse_ownership_basis_points:0,company_cash_payroll_2026:0,highest_related_cash_salary_2026:0,acquisition_cost:0,acquisition_cost_interest_basis_points:None,saved_allowance:0),",
                 "",
@@ -98,6 +101,65 @@ mod tests {
 
         assert_eq!(restored.income_plan.entries[0].actual_withholding, None);
         assert!(!restored.income_plan.entries[0].own_company_sourced);
+        assert!(!restored.income_plan.entries[0].use_annual_daily_rate_for_partial_months);
         assert_eq!(restored.income_plan.dividend_allowance, Default::default());
+    }
+
+    #[test]
+    fn vacation_saved_before_rate_field_uses_default_rate() {
+        let mut state = PersistedAppState::default();
+        let entry = &mut state.income_plan.entries[0];
+        entry.amount = 93_000;
+        entry.end = Date2026::new(10, 18);
+        entry.vacation_compensation =
+            Some(VacationCompensation::suggested(30, entry.start, entry.end));
+        let encoded = ron::to_string(&state).unwrap();
+        let legacy = encoded.replace(
+            &format!("rate_basis_points:{DEFAULT_VACATION_COMPENSATION_RATE_BASIS_POINTS},"),
+            "",
+        );
+        assert_ne!(legacy, encoded);
+
+        let restored: PersistedAppState = ron::from_str(&legacy).unwrap();
+        let vacation = restored.income_plan.entries[0]
+            .vacation_compensation
+            .unwrap();
+
+        assert_eq!(
+            vacation.rate_basis_points,
+            DEFAULT_VACATION_COMPENSATION_RATE_BASIS_POINTS
+        );
+        assert_eq!(vacation.amount(93_000), 120_528);
+    }
+
+    #[test]
+    fn salary_exchange_saved_before_previous_year_basis_still_loads() {
+        let mut state = PersistedAppState::default();
+        let entry_id = state.income_plan.add_entry(IncomeKind::OneTimeSalary);
+        let entry = state
+            .income_plan
+            .entries
+            .iter_mut()
+            .find(|entry| entry.id == entry_id)
+            .unwrap();
+        entry.salary_exchange = Some(crate::SalaryExchange::new());
+        let encoded = ron::to_string(&state).unwrap();
+        let legacy = encoded
+            .replace(",previous_year_pension_salary_basis:None", "")
+            .replace(",pension_and_insurance_costs_before_exchange:None", "");
+        assert_ne!(legacy, encoded);
+
+        let restored: PersistedAppState = ron::from_str(&legacy).unwrap();
+        let exchange = restored
+            .income_plan
+            .entries
+            .iter()
+            .find(|entry| entry.id == entry_id)
+            .unwrap()
+            .salary_exchange
+            .unwrap();
+
+        assert_eq!(exchange.previous_year_pension_salary_basis, None);
+        assert_eq!(exchange.pension_and_insurance_costs_before_exchange, None);
     }
 }

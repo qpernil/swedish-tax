@@ -42,10 +42,10 @@ pub use income_bases::{
     public_pension_progress_for_income,
 };
 pub use income_plan::{
-    AppliedWithholding, DEFAULT_SALARY_EXCHANGE_UPLIFT_BASIS_POINTS, Date2026,
-    EMPLOYER_PENSION_ALLOWANCE_MAXIMUM, EMPLOYER_PENSION_ALLOWANCE_RATE_BASIS_POINTS,
-    EntryWithholding, IncomeEntry, IncomeKind, IncomePlan, IncomePlanTotals,
-    IncomePlanValidationIssue, IncomeTaxCategory, PayerRole,
+    AppliedWithholding, DEFAULT_SALARY_EXCHANGE_UPLIFT_BASIS_POINTS,
+    DEFAULT_VACATION_COMPENSATION_RATE_BASIS_POINTS, Date2026, EMPLOYER_PENSION_ALLOWANCE_MAXIMUM,
+    EMPLOYER_PENSION_ALLOWANCE_RATE_BASIS_POINTS, EntryWithholding, IncomeEntry, IncomeKind,
+    IncomePlan, IncomePlanTotals, IncomePlanValidationIssue, IncomeTaxCategory, PayerRole,
     REGULAR_PENSION_LOWER_RATE_BASIS_POINTS, REGULAR_PENSION_MONTHLY_THRESHOLD,
     REGULAR_PENSION_UPPER_RATE_BASIS_POINTS, RegularPensionPremium, SECONDARY_WITHHOLDING_PERCENT,
     SalaryExchange, SalaryExchangeAllowance, SalaryExchangeContext, VacationCompensation,

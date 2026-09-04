@@ -384,7 +384,7 @@ pub(super) fn income_totals_footer(
             ui.add_space(5.0);
             ui.label(
                 egui::RichText::new(format!(
-                    "Salary {} · Tjänstepension received {} · Dividend {} · Employer pension contributions {}",
+                    "Salary {} · Tjänstepension received {} · Dividend {} · Modeled employer pension contributions {}",
                     format_sek(totals.work_income),
                     format_sek(totals.pension_income),
                     format_sek(totals.dividend_income),
@@ -498,6 +498,19 @@ pub(super) fn income_entry_editor(
                     egui::RichText::new("Both the first and last day are included.")
                         .small()
                         .color(secondary_text()),
+                );
+                ui.checkbox(
+                    &mut entry.use_annual_daily_rate_for_partial_months,
+                    "Use annual daily rate for partial months (12/365)",
+                );
+                ui.label(
+                    egui::RichText::new(if entry.use_annual_daily_rate_for_partial_months {
+                        "Partial months use monthly amount × 12 ÷ 365."
+                    } else {
+                        "Partial months use the number of calendar days in that month (default)."
+                    })
+                    .small()
+                    .color(secondary_text()),
                 );
                 ui.horizontal_wrapped(|ui| {
                     if ui.small_button("Full year").clicked() {
@@ -830,8 +843,8 @@ pub(super) fn salary_exchange_editor(
                     let mut exchange = SalaryExchange::new();
                     exchange.sacrificed_salary = context
                         .allowance_for(
-                        entry.amount,
-                        entry.included_in_pension_salary_basis,
+                            entry.amount,
+                            entry.included_in_pension_salary_basis,
                             exchange,
                         )
                         .maximum_sacrifice;
@@ -848,6 +861,83 @@ pub(super) fn salary_exchange_editor(
                 );
                 return;
             };
+
+            ui.add_space(6.0);
+            let mut use_previous_year_basis =
+                exchange.previous_year_pension_salary_basis.is_some();
+            if ui
+                .checkbox(
+                    &mut use_previous_year_basis,
+                    "Use previous year's pensionable salary for the 35% ceiling",
+                )
+                .on_hover_text(
+                    "Uses a fixed preceding-year salary basis. The basis and 35% ceiling then do not decrease with this salary exchange.",
+                )
+                .changed()
+            {
+                let mut current_year_exchange = *exchange;
+                current_year_exchange.previous_year_pension_salary_basis = None;
+                let suggested_basis = context
+                    .allowance_for(
+                        entry.amount,
+                        entry.included_in_pension_salary_basis,
+                        current_year_exchange,
+                    )
+                    .pension_salary_basis_before;
+                exchange.previous_year_pension_salary_basis =
+                    use_previous_year_basis.then_some(suggested_basis);
+            }
+            if let Some(previous_year_basis) = &mut exchange.previous_year_pension_salary_basis {
+                ui.label(secondary_label("Previous year's pensionable salary"));
+                ui.add_sized(
+                    [ui.available_width().min(180.0), 28.0],
+                    egui::DragValue::new(previous_year_basis)
+                        .range(0..=MAX_INCOME)
+                        .suffix(" SEK")
+                        .speed(1_000.0),
+                );
+            }
+
+            ui.add_space(6.0);
+            let mut use_actual_prior_costs = exchange
+                .pension_and_insurance_costs_before_exchange
+                .is_some();
+            if ui
+                .checkbox(
+                    &mut use_actual_prior_costs,
+                    "Use actual pension and insurance costs before this exchange",
+                )
+                .on_hover_text(
+                    "Replaces the app's estimated regular, vacation, and other pension contributions with the employer's confirmed total.",
+                )
+                .changed()
+            {
+                let mut calculated_exchange = *exchange;
+                calculated_exchange.pension_and_insurance_costs_before_exchange = None;
+                let suggested_costs = context
+                    .allowance_for(
+                        entry.amount,
+                        entry.included_in_pension_salary_basis,
+                        calculated_exchange,
+                    )
+                    .pension_contributions_before;
+                exchange.pension_and_insurance_costs_before_exchange =
+                    use_actual_prior_costs.then_some(suggested_costs);
+            }
+            if let Some(actual_costs) =
+                &mut exchange.pension_and_insurance_costs_before_exchange
+            {
+                ui.label(secondary_label(
+                    "Pension and insurance costs before exchange",
+                ));
+                ui.add_sized(
+                    [ui.available_width().min(180.0), 28.0],
+                    egui::DragValue::new(actual_costs)
+                        .range(0..=MAX_INCOME)
+                        .suffix(" SEK")
+                        .speed(1_000.0),
+                );
+            }
 
             ui.add_space(6.0);
             ui.vertical(|ui| {
@@ -883,39 +973,58 @@ pub(super) fn salary_exchange_editor(
                 .striped(true)
                 .min_col_width(220.0)
                 .show(ui, |ui| {
-                    value_row(
-                        ui,
-                        "Current-year pensionable salary before exchange",
-                        format_sek(allowance.pension_salary_basis_before),
-                    );
-                    value_row(
-                        ui,
-                        "Current-year pensionable salary after exchange",
-                        format_sek(allowance.pension_salary_basis_after),
-                    );
+                    if allowance.previous_year_pension_salary_basis.is_some() {
+                        value_row(
+                            ui,
+                            "Previous-year pensionable salary (fixed)",
+                            format_sek(allowance.pension_salary_basis_after),
+                        );
+                    } else {
+                        value_row(
+                            ui,
+                            "Current-year pensionable salary before exchange",
+                            format_sek(allowance.pension_salary_basis_before),
+                        );
+                        value_row(
+                            ui,
+                            "Current-year pensionable salary after exchange",
+                            format_sek(allowance.pension_salary_basis_after),
+                        );
+                    }
                     value_row(
                         ui,
                         "35% contribution ceiling",
                         format_sek(allowance.ceiling),
                     );
-                    value_row(
-                        ui,
-                        "Regular pension contributions",
-                        format_sek(allowance.regular_pension_premiums),
-                    );
-                    if allowance.vacation_pension_premiums > 0 {
+                    if allowance
+                        .pension_and_insurance_costs_before_exchange
+                        .is_some()
+                    {
                         value_row(
                             ui,
-                            "Vacation-payout pension contribution",
-                            format_sek(allowance.vacation_pension_premiums),
+                            "Actual pension and insurance costs before exchange",
+                            format_sek(allowance.pension_contributions_before),
                         );
-                    }
-                    if allowance.other_exchange_contributions > 0 {
+                    } else {
                         value_row(
                             ui,
-                            "Other salary-exchange contributions",
-                            format_sek(allowance.other_exchange_contributions),
+                            "Regular pension contributions",
+                            format_sek(allowance.regular_pension_premiums),
                         );
+                        if allowance.vacation_pension_premiums > 0 {
+                            value_row(
+                                ui,
+                                "Vacation-payout pension contribution",
+                                format_sek(allowance.vacation_pension_premiums),
+                            );
+                        }
+                        if allowance.other_exchange_contributions > 0 {
+                            value_row(
+                                ui,
+                                "Other salary-exchange contributions",
+                                format_sek(allowance.other_exchange_contributions),
+                            );
+                        }
                     }
                     value_row(
                         ui,
@@ -924,21 +1033,31 @@ pub(super) fn salary_exchange_editor(
                     );
                     value_row(
                         ui,
-                        "Total tjänstepension contributions",
+                        "Pension and insurance costs for allowance",
                         format_sek(allowance.total_employer_pension_contributions),
                     );
                     value_row(
                         ui,
-                        "Share of pensionable salary after exchange",
+                        if allowance.previous_year_pension_salary_basis.is_some() {
+                            "Share of previous-year pensionable salary"
+                        } else {
+                            "Share of current-year pensionable salary after exchange"
+                        },
                         format!("{:.2}%", allowance.contribution_share_of_basis()),
                     );
                 });
+            let allowance_explanation = if allowance
+                .previous_year_pension_salary_basis
+                .is_some()
+            {
+                "Previous-year main-rule estimate: pension and insurance costs may be 35% of the fixed preceding-year pensionable salary, rounded down to whole SEK and capped at 592 000 SEK for 2026."
+            } else {
+                "Current-year main-rule estimate: pension and insurance costs may be 35% of pensionable salary after exchange, rounded down to whole SEK and capped at 592 000 SEK for 2026."
+            };
             ui.label(
-                egui::RichText::new(
-                    "Current-year main-rule estimate: total employer pension contributions may be 35% of pensionable salary after exchange, capped at 592 000 SEK for 2026.",
-                )
-                .small()
-                .color(secondary_text()),
+                egui::RichText::new(allowance_explanation)
+                    .small()
+                    .color(secondary_text()),
             );
 
             ui.add_space(6.0);
@@ -1064,10 +1183,19 @@ pub(super) fn vacation_compensation_editor(
                 );
             }
             ui.add_space(6.0);
-            let per_day = VacationCompensation::amount_per_day(entry.amount);
+            ui.label(secondary_label("Compensation rate per paid day"));
+            ui.horizontal(|ui| {
+                basis_points_percentage_editor(
+                    ui,
+                    "vacation-compensation-rate",
+                    &mut vacation.rate_basis_points,
+                );
+            });
+            let per_day = vacation.amount_per_day(entry.amount);
             ui.label(
                 egui::RichText::new(format!(
-                    "Same-year statutory estimate: monthly salary / 21 + 0.43% of monthly salary = {per_day:.2} SEK/day"
+                    "Monthly salary × {}% = {per_day:.2} SEK/day",
+                    format_basis_points_percentage(vacation.rate_basis_points),
                 ))
                 .small()
                 .color(secondary_text()),

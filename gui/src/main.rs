@@ -285,7 +285,7 @@ impl TaxApp {
             );
             ui.label(
                 egui::RichText::new(format!(
-                    "Total tjänstepension contribution {} · {:.2}% of pensionable salary after exchange",
+                    "Modeled tjänstepension contributions {} · {:.2}% of current-year pensionable salary after exchange",
                     format_sek(totals.total_employer_pension_contributions()),
                     totals.employer_pension_share_of_basis(),
                 ))

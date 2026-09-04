@@ -140,9 +140,9 @@ pub(super) fn annual_reconciliation(ui: &mut egui::Ui, calculation: Calculation)
             if calculation.employer_pension_contributions > 0 {
                 value_row(
                     ui,
-                    "Total tjänstepension contribution",
+                    "Modeled tjänstepension contributions",
                     format!(
-                        "{} · {:.2}% of pensionable salary after exchange",
+                        "{} · {:.2}% of current-year pensionable salary after exchange",
                         format_sek(calculation.employer_pension_contributions),
                         calculation.employer_pension_share_of_basis(),
                     ),
@@ -486,7 +486,7 @@ pub(super) fn calculation_trace(
             );
             trace_line(
                 ui,
-                "Total tjänstepension contributions",
+                "Modeled tjänstepension contributions",
                 format!(
                     "{} regular + {} vacation payout + {} salary exchange",
                     format_sek(calculation.regular_pension_premiums),
@@ -497,7 +497,7 @@ pub(super) fn calculation_trace(
             );
             trace_line(
                 ui,
-                "Share of pensionable salary after exchange",
+                "Share of current-year pensionable salary after exchange",
                 format!(
                     "{} total contributions ÷ {} pension-salary basis after exchange × 100",
                     format_sek(calculation.employer_pension_contributions),

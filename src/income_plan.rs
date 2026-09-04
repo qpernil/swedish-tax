@@ -137,7 +137,13 @@ pub const REGULAR_PENSION_UPPER_RATE_BASIS_POINTS: u32 = 3_000;
 pub const EMPLOYER_PENSION_ALLOWANCE_RATE_BASIS_POINTS: u32 = 3_500;
 pub const EMPLOYER_PENSION_ALLOWANCE_MAXIMUM: u32 = 592_000;
 pub const DEFAULT_SALARY_EXCHANGE_UPLIFT_BASIS_POINTS: u32 = 576;
+/// Default vacation-compensation value per paid day: 5.4% of monthly salary.
+pub const DEFAULT_VACATION_COMPENSATION_RATE_BASIS_POINTS: u32 = 540;
 pub const SECONDARY_WITHHOLDING_PERCENT: u32 = 30;
+
+const fn default_vacation_compensation_rate_basis_points() -> u32 {
+    DEFAULT_VACATION_COMPENSATION_RATE_BASIS_POINTS
+}
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct RegularPensionPremium {
@@ -170,6 +176,14 @@ pub struct SalaryExchange {
     pub employer_adds_uplift: bool,
     /// Hundredths of one percent; 576 means 5.76%.
     pub uplift_basis_points: u32,
+    /// Fixed pensionable salary from the preceding tax year, when the
+    /// employer uses that instead of the current-year salary basis.
+    #[serde(default)]
+    pub previous_year_pension_salary_basis: Option<u32>,
+    /// Actual employer pension and insurance costs already counted against
+    /// the 35% allowance before this salary exchange.
+    #[serde(default)]
+    pub pension_and_insurance_costs_before_exchange: Option<u32>,
 }
 
 impl SalaryExchange {
@@ -178,6 +192,8 @@ impl SalaryExchange {
             sacrificed_salary: 0,
             employer_adds_uplift: true,
             uplift_basis_points: DEFAULT_SALARY_EXCHANGE_UPLIFT_BASIS_POINTS,
+            previous_year_pension_salary_basis: None,
+            pension_and_insurance_costs_before_exchange: None,
         }
     }
 
@@ -193,11 +209,10 @@ impl SalaryExchange {
     }
 
     pub fn allowance_ceiling(pension_salary_basis: u32) -> u32 {
-        basis_points_rounded(
-            pension_salary_basis,
-            EMPLOYER_PENSION_ALLOWANCE_RATE_BASIS_POINTS,
-        )
-        .min(EMPLOYER_PENSION_ALLOWANCE_MAXIMUM)
+        ((u64::from(pension_salary_basis)
+            * u64::from(EMPLOYER_PENSION_ALLOWANCE_RATE_BASIS_POINTS))
+            / 10_000)
+            .min(u64::from(EMPLOYER_PENSION_ALLOWANCE_MAXIMUM)) as u32
     }
 
     pub fn maximum_sacrifice(
@@ -211,11 +226,14 @@ impl SalaryExchange {
         let mut high = payment_amount;
         while low < high {
             let candidate_sacrifice = low + (high - low).div_ceil(2);
-            let pension_salary_basis_after = if payment_is_pensionable {
-                pension_salary_basis_before.saturating_sub(candidate_sacrifice)
-            } else {
-                pension_salary_basis_before
-            };
+            let pension_salary_basis_after =
+                self.previous_year_pension_salary_basis.unwrap_or_else(|| {
+                    if payment_is_pensionable {
+                        pension_salary_basis_before.saturating_sub(candidate_sacrifice)
+                    } else {
+                        pension_salary_basis_before
+                    }
+                });
             let ceiling = Self::allowance_ceiling(pension_salary_basis_after);
             let mut candidate = self;
             candidate.sacrificed_salary = candidate_sacrifice;
@@ -247,6 +265,10 @@ pub struct IncomeEntry {
     pub amount: u32,
     pub start: Date2026,
     pub end: Date2026,
+    /// Use monthly amount × 12 / 365 for a partial first or last month.
+    /// The default instead divides by the calendar days in that month.
+    #[serde(default)]
+    pub use_annual_daily_rate_for_partial_months: bool,
     pub payer_role: PayerRole,
     /// Whether this cash salary is paid by the owner's company or qualifying group.
     /// For 2026 income rows it feeds the following year's 3:12 wage basis.
@@ -282,6 +304,7 @@ impl IncomeEntry {
             amount: 0,
             start: Date2026::new(1, 1),
             end: Date2026::new(12, 31),
+            use_annual_daily_rate_for_partial_months: false,
             payer_role: PayerRole::Main,
             own_company_sourced: false,
             adjustment_applies: false,
@@ -319,6 +342,9 @@ impl IncomeEntry {
         }
         if kind != IncomeKind::MonthlySalary {
             self.vacation_compensation = None;
+        }
+        if !kind.is_monthly() {
+            self.use_annual_daily_rate_for_partial_months = false;
         }
         if !matches!(kind, IncomeKind::AnnualSalary | IncomeKind::MonthlySalary) {
             self.use_full_year_projection_as_adjustment_basis = false;
@@ -405,7 +431,7 @@ impl IncomeEntry {
             Date2026::days_in_month(month)
         };
         let active_days = u32::from(last_day.saturating_sub(first_day) + 1);
-        self.amount.saturating_mul(active_days) / u32::from(Date2026::days_in_month(month))
+        self.prorated_partial_month_value(month, self.amount, active_days)
     }
 
     pub fn is_valid(&self) -> bool {
@@ -554,7 +580,21 @@ impl IncomeEntry {
             Date2026::days_in_month(month)
         };
         let active_days = u32::from(last_day.saturating_sub(first_day) + 1);
-        monthly_value.saturating_mul(active_days) / u32::from(Date2026::days_in_month(month))
+        self.prorated_partial_month_value(month, monthly_value, active_days)
+    }
+
+    fn prorated_partial_month_value(&self, month: u8, monthly_value: u32, active_days: u32) -> u32 {
+        let days_in_month = u32::from(Date2026::days_in_month(month));
+        if active_days == days_in_month {
+            return monthly_value;
+        }
+        if self.use_annual_daily_rate_for_partial_months {
+            let numerator = u64::from(monthly_value)
+                .saturating_mul(12)
+                .saturating_mul(u64::from(active_days));
+            return ((numerator + 182) / 365).min(u64::from(u32::MAX)) as u32;
+        }
+        monthly_value.saturating_mul(active_days) / days_in_month
     }
 }
 
@@ -562,6 +602,9 @@ impl IncomeEntry {
 pub struct VacationCompensation {
     pub annual_entitlement_days: u32,
     pub payout_days: u32,
+    /// Hundredths of one percent of monthly salary per day; 540 means 5.4%.
+    #[serde(default = "default_vacation_compensation_rate_basis_points")]
+    pub rate_basis_points: u32,
     pub included_in_pension_salary_basis: bool,
     /// Actual one-time employer premium attributable to the vacation payout.
     pub pension_premium_override: Option<u32>,
@@ -572,6 +615,7 @@ impl VacationCompensation {
         Self {
             annual_entitlement_days,
             payout_days: Self::suggested_days(annual_entitlement_days, start, end),
+            rate_basis_points: DEFAULT_VACATION_COMPENSATION_RATE_BASIS_POINTS,
             included_in_pension_salary_basis: true,
             pension_premium_override: None,
         }
@@ -590,18 +634,16 @@ impl VacationCompensation {
             / 365
     }
 
-    /// Statutory same-pay estimate: monthly salary / 21 plus 0.43% per day.
+    /// Vacation compensation for all paid days at the configured daily rate.
     pub fn amount(self, monthly_salary: u32) -> u32 {
-        const DENOMINATOR: u64 = 21 * 10_000;
-        const NUMERATOR_PER_DAY: u64 = 10_000 + 43 * 21;
         let numerator = u64::from(monthly_salary)
             .saturating_mul(u64::from(self.payout_days))
-            .saturating_mul(NUMERATOR_PER_DAY);
-        (numerator.saturating_add(DENOMINATOR / 2) / DENOMINATOR).min(u64::from(u32::MAX)) as u32
+            .saturating_mul(u64::from(self.rate_basis_points));
+        (numerator.saturating_add(5_000) / 10_000).min(u64::from(u32::MAX)) as u32
     }
 
-    pub fn amount_per_day(monthly_salary: u32) -> f64 {
-        f64::from(monthly_salary) / 21.0 + f64::from(monthly_salary) * 0.0043
+    pub fn amount_per_day(self, monthly_salary: u32) -> f64 {
+        f64::from(monthly_salary) * f64::from(self.rate_basis_points) / 10_000.0
     }
 
     pub fn additional_benchmark_pension_premium(self, monthly_salary: u32) -> u32 {
@@ -857,8 +899,10 @@ impl IncomePlanTotals {
             .saturating_add(self.salary_exchange_pension_contributions)
     }
 
-    /// Total employer occupational-pension contributions as a percentage of
-    /// the current-year pension-salary basis after salary exchange.
+    /// Modeled employer occupational-pension contributions as a percentage of
+    /// the current-year pension-salary basis after salary exchange. This is
+    /// distinct from an allowance calculation that uses confirmed costs or a
+    /// preceding-year salary basis.
     pub fn employer_pension_share_of_basis(self) -> f64 {
         if self.pension_salary_basis == 0 {
             0.0
@@ -874,6 +918,9 @@ pub struct SalaryExchangeAllowance {
     pub ceiling: u32,
     pub pension_salary_basis_before: u32,
     pub pension_salary_basis_after: u32,
+    pub previous_year_pension_salary_basis: Option<u32>,
+    pub pension_and_insurance_costs_before_exchange: Option<u32>,
+    pub pension_contributions_before: u32,
     pub regular_pension_premiums: u32,
     pub vacation_pension_premiums: u32,
     pub other_exchange_contributions: u32,
@@ -909,18 +956,24 @@ impl SalaryExchangeContext {
         included_in_pension_salary_basis: bool,
         exchange: SalaryExchange,
     ) -> SalaryExchangeAllowance {
-        let pension_contributions_before = self
+        let calculated_pension_contributions_before = self
             .regular_pension_premiums
             .saturating_add(self.vacation_pension_premiums)
             .saturating_add(self.other_exchange_contributions);
+        let pension_contributions_before = exchange
+            .pension_and_insurance_costs_before_exchange
+            .unwrap_or(calculated_pension_contributions_before);
         let payment_in_basis = if included_in_pension_salary_basis {
             payment_amount
         } else {
             0
         };
-        let pension_salary_basis_before = self
+        let current_year_pension_salary_basis_before = self
             .other_pension_salary_basis
             .saturating_add(payment_in_basis);
+        let pension_salary_basis_before = exchange
+            .previous_year_pension_salary_basis
+            .unwrap_or(current_year_pension_salary_basis_before);
         let maximum_sacrifice = exchange.maximum_sacrifice(
             payment_amount,
             pension_salary_basis_before,
@@ -928,11 +981,15 @@ impl SalaryExchangeContext {
             included_in_pension_salary_basis,
         );
         let sacrifice = exchange.sacrificed_salary.min(maximum_sacrifice);
-        let pension_salary_basis_after = if included_in_pension_salary_basis {
-            pension_salary_basis_before.saturating_sub(sacrifice)
-        } else {
-            pension_salary_basis_before
-        };
+        let pension_salary_basis_after = exchange
+            .previous_year_pension_salary_basis
+            .unwrap_or_else(|| {
+                if included_in_pension_salary_basis {
+                    pension_salary_basis_before.saturating_sub(sacrifice)
+                } else {
+                    pension_salary_basis_before
+                }
+            });
         let ceiling = SalaryExchange::allowance_ceiling(pension_salary_basis_after);
         let mut applied_exchange = exchange;
         applied_exchange.sacrificed_salary = sacrifice;
@@ -944,6 +1001,10 @@ impl SalaryExchangeContext {
             ceiling,
             pension_salary_basis_before,
             pension_salary_basis_after,
+            previous_year_pension_salary_basis: exchange.previous_year_pension_salary_basis,
+            pension_and_insurance_costs_before_exchange: exchange
+                .pension_and_insurance_costs_before_exchange,
+            pension_contributions_before,
             regular_pension_premiums: self.regular_pension_premiums,
             vacation_pension_premiums: self.vacation_pension_premiums,
             other_exchange_contributions: self.other_exchange_contributions,

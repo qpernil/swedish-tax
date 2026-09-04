@@ -123,6 +123,7 @@ typedef struct SwedishTaxVacationCompensation {
   uint32_t is_some;
   uint32_t annual_entitlement_days;
   uint32_t payout_days;
+  uint32_t rate_basis_points;
   uint32_t included_in_pension_salary_basis;
   struct SwedishTaxOptionalU32 pension_premium_override;
 } SwedishTaxVacationCompensation;
@@ -137,6 +138,8 @@ typedef struct SwedishTaxSalaryExchange {
   uint32_t sacrificed_salary;
   uint32_t employer_adds_uplift;
   uint32_t uplift_basis_points;
+  struct SwedishTaxOptionalU32 previous_year_pension_salary_basis;
+  struct SwedishTaxOptionalU32 pension_and_insurance_costs_before_exchange;
 } SwedishTaxSalaryExchange;
 
 typedef struct SwedishTaxIncomeEntry {
@@ -145,6 +148,7 @@ typedef struct SwedishTaxIncomeEntry {
   uint32_t amount;
   struct SwedishTaxDate start;
   struct SwedishTaxDate end;
+  uint32_t use_annual_daily_rate_for_partial_months;
   uint32_t payer_role;
   uint32_t own_company_sourced;
   uint32_t adjustment_applies;

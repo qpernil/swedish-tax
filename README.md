@@ -26,13 +26,21 @@ and secondary payers (including percentage adjustment decisions), reconciles
 withholding with annual final tax, and estimates progress toward the 2026 PGI
 and SGI ceilings. Regular salary rows can estimate an ITP 1-equivalent employer
 pension contribution, while one-time salary rows can model an editable salary exchange,
-the employer uplift, the remaining pension allowance, and the taxable cash payment.
+the employer uplift, the remaining pension allowance, and the taxable cash payment. The
+35-percent allowance can optionally use a fixed, editable pensionable salary from the
+preceding tax year instead of the current-year salary basis. An optional confirmed total
+for pension and insurance costs before the exchange can replace the app's component
+estimates in the allowance calculation.
 Vacation compensation is pensionable by default in the ITP 1-style model and shows
-its estimated additional employer contribution separately. Pensionability and actual
-contribution amounts remain editable for individually agreed pension terms.
+its estimated additional employer contribution separately. The editable scenario default
+is 5.4% of monthly salary per paid day, a common collective-agreement calculation, and the
+percentage, pensionability, and actual contribution amounts remain editable for individually
+agreed terms.
 Recurring salary rows can also use their 12-month projection as the annual income
 basis behind a percentage jämkning decision. The annual result then shows the
 calibration explicitly while preserving the row's actual payment dates.
+Partial first and last months divide by the calendar days in that month by default;
+an optional row setting instead uses the annual daily rate (monthly amount × 12 / 365).
 The app also estimates the 2027 3:12 gränsbelopp for qualified shares: the
 ownership-adjusted basic amount, wage-based allowance using 2026 payroll, the
 50-times-salary cap, acquisition-cost interest, and saved allowance. Salary
@@ -84,6 +92,7 @@ other consumers and packaging workflows.
 - [Sickness-benefit qualifying income (SGI)](https://www.forsakringskassan.se/privatperson/sjukpenninggrundande-inkomst-sgi)
 - [2026 ITP 1-equivalent pension-contribution benchmark](https://collectum.se/avtal-och-faktura/faktura-och-premier/aktuella-premier-och-basbelopp)
 - [ITP pensionable salary, including vacation compensation](https://collectum.se/administration/sa-rapporterar-du-ratt/pensionsmedforande-lon)
+- [Common 5.4% vacation-compensation calculation](https://www.unionen.se/rad-och-stod/rakna-ut-din-semesterersattning)
 - [Employer pension-cost deduction rules](https://www4.skatteverket.se/rattsligvagledning/edition/2026.3/339021.html)
 - [Changed 3:12 rules for income year 2026](https://www.skatteverket.se/foretag/drivaforetag/foretagsformer/famansforetag/andradereglerfordelagareifamansforetaginforinkomstdeklarationen2027.4.4a54dc8b19aa6175a152359.html)
 - [2026 income-base amount used by the preliminary 2027 estimate](https://www.skatteverket.se/privat/skatter/beloppochprocent/2026/beloppochprocent2026kortversion.4.1522bf3f19aea8075ba89.html)

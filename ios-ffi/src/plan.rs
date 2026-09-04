@@ -8,7 +8,7 @@ use swedish_tax::{
 
 use super::{STATUS_INTERNAL_ERROR, STATUS_INVALID_INPUT, STATUS_OK, SwedishTaxAnnualTaxResult};
 
-const CONTRACT_VERSION: u32 = 1;
+const CONTRACT_VERSION: u32 = 2;
 
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
@@ -49,6 +49,7 @@ pub struct SwedishTaxVacationCompensation {
     pub is_some: u32,
     pub annual_entitlement_days: u32,
     pub payout_days: u32,
+    pub rate_basis_points: u32,
     pub included_in_pension_salary_basis: u32,
     pub pension_premium_override: SwedishTaxOptionalU32,
 }
@@ -61,6 +62,7 @@ impl SwedishTaxVacationCompensation {
             Some(VacationCompensation {
                 annual_entitlement_days: self.annual_entitlement_days,
                 payout_days: self.payout_days,
+                rate_basis_points: self.rate_basis_points,
                 included_in_pension_salary_basis: self.included_in_pension_salary_basis != 0,
                 pension_premium_override: self.pension_premium_override.into_option(),
             })
@@ -94,6 +96,8 @@ pub struct SwedishTaxSalaryExchange {
     pub sacrificed_salary: u32,
     pub employer_adds_uplift: u32,
     pub uplift_basis_points: u32,
+    pub previous_year_pension_salary_basis: SwedishTaxOptionalU32,
+    pub pension_and_insurance_costs_before_exchange: SwedishTaxOptionalU32,
 }
 
 impl SwedishTaxSalaryExchange {
@@ -105,6 +109,12 @@ impl SwedishTaxSalaryExchange {
                 sacrificed_salary: self.sacrificed_salary,
                 employer_adds_uplift: self.employer_adds_uplift != 0,
                 uplift_basis_points: self.uplift_basis_points,
+                previous_year_pension_salary_basis: self
+                    .previous_year_pension_salary_basis
+                    .into_option(),
+                pension_and_insurance_costs_before_exchange: self
+                    .pension_and_insurance_costs_before_exchange
+                    .into_option(),
             })
         }
     }
@@ -118,6 +128,7 @@ pub struct SwedishTaxIncomeEntry {
     pub amount: u32,
     pub start: SwedishTaxDate,
     pub end: SwedishTaxDate,
+    pub use_annual_daily_rate_for_partial_months: u32,
     pub payer_role: u32,
     pub own_company_sourced: u32,
     pub adjustment_applies: u32,
@@ -150,6 +161,8 @@ impl SwedishTaxIncomeEntry {
         entry.amount = self.amount;
         entry.start = self.start.into_core()?;
         entry.end = self.end.into_core()?;
+        entry.use_annual_daily_rate_for_partial_months =
+            self.use_annual_daily_rate_for_partial_months != 0;
         entry.payer_role = payer_role;
         entry.own_company_sourced = self.own_company_sourced != 0;
         entry.adjustment_applies = self.adjustment_applies != 0;
@@ -510,6 +523,7 @@ mod tests {
             amount: 55_033,
             start: SwedishTaxDate { month: 1, day: 1 },
             end: SwedishTaxDate { month: 12, day: 31 },
+            use_annual_daily_rate_for_partial_months: 0,
             payer_role: 0,
             own_company_sourced: 0,
             adjustment_applies: 0,
@@ -520,6 +534,7 @@ mod tests {
                 is_some: 0,
                 annual_entitlement_days: 0,
                 payout_days: 0,
+                rate_basis_points: 0,
                 included_in_pension_salary_basis: 0,
                 pension_premium_override: none(),
             },
@@ -532,6 +547,8 @@ mod tests {
                 sacrificed_salary: 0,
                 employer_adds_uplift: 0,
                 uplift_basis_points: 0,
+                previous_year_pension_salary_basis: none(),
+                pension_and_insurance_costs_before_exchange: none(),
             },
             included_in_pension_salary_basis: 1,
         }];
@@ -559,6 +576,108 @@ mod tests {
         assert_eq!(result.status, STATUS_OK);
         assert_eq!(result.monthly_income, 55_033);
         assert_eq!(result.withholding_entries_count, 1);
+        unsafe { swedish_tax_calculation_result_free(result) };
+    }
+
+    #[test]
+    fn contract_version_two_maps_non_default_planning_fields() {
+        let entries = [
+            SwedishTaxIncomeEntry {
+                id: 1,
+                kind: 1,
+                amount: 93_000,
+                start: SwedishTaxDate { month: 1, day: 1 },
+                end: SwedishTaxDate { month: 10, day: 18 },
+                use_annual_daily_rate_for_partial_months: 1,
+                payer_role: 0,
+                own_company_sourced: 0,
+                adjustment_applies: 0,
+                use_full_year_projection_as_adjustment_basis: 0,
+                additional_withholding_per_payment: none(),
+                actual_withholding: none(),
+                vacation_compensation: SwedishTaxVacationCompensation {
+                    is_some: 1,
+                    annual_entitlement_days: 30,
+                    payout_days: 20,
+                    rate_basis_points: 500,
+                    included_in_pension_salary_basis: 1,
+                    pension_premium_override: none(),
+                },
+                regular_pension_premium: SwedishTaxRegularPensionPremium {
+                    is_some: 0,
+                    monthly_override: none(),
+                },
+                salary_exchange: SwedishTaxSalaryExchange {
+                    is_some: 0,
+                    sacrificed_salary: 0,
+                    employer_adds_uplift: 0,
+                    uplift_basis_points: 0,
+                    previous_year_pension_salary_basis: none(),
+                    pension_and_insurance_costs_before_exchange: none(),
+                },
+                included_in_pension_salary_basis: 1,
+            },
+            SwedishTaxIncomeEntry {
+                id: 2,
+                kind: 2,
+                amount: 372_000,
+                start: SwedishTaxDate { month: 1, day: 1 },
+                end: SwedishTaxDate { month: 12, day: 31 },
+                use_annual_daily_rate_for_partial_months: 0,
+                payer_role: 0,
+                own_company_sourced: 0,
+                adjustment_applies: 0,
+                use_full_year_projection_as_adjustment_basis: 0,
+                additional_withholding_per_payment: none(),
+                actual_withholding: none(),
+                vacation_compensation: SwedishTaxVacationCompensation {
+                    is_some: 0,
+                    annual_entitlement_days: 0,
+                    payout_days: 0,
+                    rate_basis_points: 0,
+                    included_in_pension_salary_basis: 0,
+                    pension_premium_override: none(),
+                },
+                regular_pension_premium: SwedishTaxRegularPensionPremium {
+                    is_some: 0,
+                    monthly_override: none(),
+                },
+                salary_exchange: SwedishTaxSalaryExchange {
+                    is_some: 1,
+                    sacrificed_salary: 211_000,
+                    employer_adds_uplift: 1,
+                    uplift_basis_points: 580,
+                    previous_year_pension_salary_basis: some(1_092_000),
+                    pension_and_insurance_costs_before_exchange: some(158_170),
+                },
+                included_in_pension_salary_basis: 0,
+            },
+        ];
+        let request = SwedishTaxPlanRequest {
+            version: CONTRACT_VERSION,
+            table: 32,
+            age_group: 0,
+            entries: entries.as_ptr(),
+            entries_count: entries.len(),
+            adjustment_percent: none(),
+            dividend_allowance: SwedishTaxDividendAllowanceInputs {
+                one_person_company: 1,
+                ownership_basis_points: 10_000,
+                other_qualified_ownership_basis_points: 0,
+                spouse_ownership_basis_points: 0,
+                company_cash_payroll_2026: 0,
+                highest_related_cash_salary_2026: 0,
+                acquisition_cost: 0,
+                acquisition_cost_interest_basis_points: none(),
+                saved_allowance: 0,
+            },
+        };
+
+        let result = unsafe { swedish_tax_calculate_plan(&request) };
+        assert_eq!(result.status, STATUS_OK);
+        assert_eq!(result.work_income, 1_146_036);
+        assert_eq!(result.salary_exchange_sacrifice, 211_000);
+        assert_eq!(result.salary_exchange_pension_contributions, 223_238);
         unsafe { swedish_tax_calculation_result_free(result) };
     }
 
