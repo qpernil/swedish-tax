@@ -183,6 +183,26 @@ typedef struct SwedishTaxPlanRequest {
   struct SwedishTaxDividendAllowanceInputs dividend_allowance;
 } SwedishTaxPlanRequest;
 
+typedef struct SwedishTaxDividendAllowanceResult {
+  uint32_t status;
+  uint32_t issue_kind;
+  uint32_t basic_amount;
+  uint32_t owner_cash_salary;
+  uint32_t company_cash_payroll;
+  uint32_t joint_wage_basis;
+  uint32_t joint_wage_basis_after_deduction;
+  uint32_t wage_allowance_before_cap;
+  uint32_t wage_cap_salary;
+  uint32_t wage_cap;
+  uint32_t wage_allowance;
+  uint32_t acquisition_cost_interest_basis;
+  uint32_t acquisition_cost_interest;
+  uint32_t saved_allowance;
+  uint32_t total;
+  uint32_t tax_at_twenty_percent;
+  uint32_t net_after_twenty_percent_tax;
+} SwedishTaxDividendAllowanceResult;
+
 #ifdef __cplusplus
 extern "C" {
 #endif // __cplusplus
@@ -207,6 +227,8 @@ struct SwedishTaxAnnualTaxResult swedish_tax_annual_tax_for_income_profile(uint3
 uint32_t swedish_tax_contract_version(void);
 
 struct SwedishTaxCalculationResult swedish_tax_calculate_plan(const struct SwedishTaxPlanRequest *request);
+
+struct SwedishTaxDividendAllowanceResult swedish_tax_dividend_allowance_for_plan(const struct SwedishTaxPlanRequest *request);
 
 void swedish_tax_calculation_result_free(struct SwedishTaxCalculationResult result);
 

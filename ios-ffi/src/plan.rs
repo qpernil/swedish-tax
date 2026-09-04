@@ -1,9 +1,10 @@
 use std::{panic::catch_unwind, slice};
 
 use swedish_tax::{
-    AdjustmentCalibration, AppliedWithholding, Calculation, Date2026, DividendAllowanceInputs2027,
-    IncomeBasisEstimate, IncomeEntry, IncomeKind, IncomePlan, PayerRole, RegularPensionPremium,
-    SalaryExchange, TaxAgeGroup, TaxDeduction, VacationCompensation,
+    AdjustmentCalibration, AppliedWithholding, Calculation, Date2026, DividendAllowance2027,
+    DividendAllowanceInputs2027, DividendAllowanceIssue, IncomeBasisEstimate, IncomeEntry,
+    IncomeKind, IncomePlan, PayerRole, RegularPensionPremium, SalaryExchange, TaxAgeGroup,
+    TaxDeduction, VacationCompensation,
 };
 
 use super::{STATUS_INTERNAL_ERROR, STATUS_INVALID_INPUT, STATUS_OK, SwedishTaxAnnualTaxResult};
@@ -211,6 +212,73 @@ impl SwedishTaxDividendAllowanceInputs {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+#[repr(C)]
+pub struct SwedishTaxDividendAllowanceResult {
+    pub status: u32,
+    pub issue_kind: u32,
+    pub basic_amount: u32,
+    pub owner_cash_salary: u32,
+    pub company_cash_payroll: u32,
+    pub joint_wage_basis: u32,
+    pub joint_wage_basis_after_deduction: u32,
+    pub wage_allowance_before_cap: u32,
+    pub wage_cap_salary: u32,
+    pub wage_cap: u32,
+    pub wage_allowance: u32,
+    pub acquisition_cost_interest_basis: u32,
+    pub acquisition_cost_interest: u32,
+    pub saved_allowance: u32,
+    pub total: u32,
+    pub tax_at_twenty_percent: u32,
+    pub net_after_twenty_percent_tax: u32,
+}
+
+impl SwedishTaxDividendAllowanceResult {
+    fn error(status: u32) -> Self {
+        Self {
+            status,
+            ..Self::default()
+        }
+    }
+
+    fn issue(issue: DividendAllowanceIssue) -> Self {
+        let issue_kind = match issue {
+            DividendAllowanceIssue::OwnershipExceedsOneHundredPercent => 1,
+            DividendAllowanceIssue::SpouseOwnershipExceedsCompany => 2,
+            DividendAllowanceIssue::PersonalSalaryExceedsCompanyPayroll => 3,
+            DividendAllowanceIssue::MissingAcquisitionCostInterestRate => 4,
+        };
+        Self {
+            status: STATUS_OK,
+            issue_kind,
+            ..Self::default()
+        }
+    }
+
+    fn success(value: DividendAllowance2027) -> Self {
+        Self {
+            status: STATUS_OK,
+            issue_kind: 0,
+            basic_amount: value.basic_amount,
+            owner_cash_salary: value.owner_cash_salary,
+            company_cash_payroll: value.company_cash_payroll,
+            joint_wage_basis: value.joint_wage_basis,
+            joint_wage_basis_after_deduction: value.joint_wage_basis_after_deduction,
+            wage_allowance_before_cap: value.wage_allowance_before_cap,
+            wage_cap_salary: value.wage_cap_salary,
+            wage_cap: value.wage_cap,
+            wage_allowance: value.wage_allowance,
+            acquisition_cost_interest_basis: value.acquisition_cost_interest_basis,
+            acquisition_cost_interest: value.acquisition_cost_interest,
+            saved_allowance: value.saved_allowance,
+            total: value.total,
+            tax_at_twenty_percent: value.tax_at_twenty_percent(),
+            net_after_twenty_percent_tax: value.net_after_twenty_percent_tax(),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub struct SwedishTaxPlanRequest {
@@ -381,33 +449,31 @@ pub unsafe extern "C" fn swedish_tax_calculate_plan(
     .unwrap_or_else(|_| SwedishTaxCalculationResult::error(STATUS_INTERNAL_ERROR))
 }
 
-fn calculate(request: SwedishTaxPlanRequest) -> Option<SwedishTaxCalculationResult> {
-    if request.version != CONTRACT_VERSION
-        || (request.entries.is_null() && request.entries_count != 0)
-    {
-        return None;
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn swedish_tax_dividend_allowance_for_plan(
+    request: *const SwedishTaxPlanRequest,
+) -> SwedishTaxDividendAllowanceResult {
+    if request.is_null() {
+        return SwedishTaxDividendAllowanceResult::error(STATUS_INVALID_INPUT);
     }
-    let table = u8::try_from(request.table).ok()?;
-    let age_group = match request.age_group {
-        0 => TaxAgeGroup::Under66AtYearStart,
-        1 => TaxAgeGroup::AtLeast66AtYearStart,
-        _ => return None,
-    };
-    let source_entries = if request.entries_count == 0 {
-        &[]
-    } else {
-        // SAFETY: The request contract requires entries_count readable values.
-        unsafe { slice::from_raw_parts(request.entries, request.entries_count) }
-    };
-    let entries: Option<Vec<_>> = source_entries
-        .iter()
-        .copied()
-        .map(SwedishTaxIncomeEntry::into_core)
-        .collect();
-    let mut plan = IncomePlan::with_annual_salary(0);
-    plan.entries = entries?;
-    plan.adjustment_percent = request.adjustment_percent.into_option();
-    plan.dividend_allowance = request.dividend_allowance.into_core();
+    catch_unwind(|| {
+        // SAFETY: The C contract requires a readable request for this call.
+        dividend_allowance(unsafe { *request })
+            .unwrap_or_else(|| SwedishTaxDividendAllowanceResult::error(STATUS_INVALID_INPUT))
+    })
+    .unwrap_or_else(|_| SwedishTaxDividendAllowanceResult::error(STATUS_INTERNAL_ERROR))
+}
+
+fn dividend_allowance(request: SwedishTaxPlanRequest) -> Option<SwedishTaxDividendAllowanceResult> {
+    let (_, _, plan) = plan_from_request(request)?;
+    Some(match plan.dividend_allowance_2027() {
+        Ok(value) => SwedishTaxDividendAllowanceResult::success(value),
+        Err(issue) => SwedishTaxDividendAllowanceResult::issue(issue),
+    })
+}
+
+fn calculate(request: SwedishTaxPlanRequest) -> Option<SwedishTaxCalculationResult> {
+    let (table, age_group, plan) = plan_from_request(request)?;
 
     let calculation = Calculation::new(table, age_group, &plan)?;
     let withholding = plan.estimated_withholding(table, age_group);
@@ -482,6 +548,36 @@ fn calculate(request: SwedishTaxPlanRequest) -> Option<SwedishTaxCalculationResu
         pension_progress: calculation.pension_progress.into(),
         sgi_progress: calculation.sgi_progress.into(),
     })
+}
+
+fn plan_from_request(request: SwedishTaxPlanRequest) -> Option<(u8, TaxAgeGroup, IncomePlan)> {
+    if request.version != CONTRACT_VERSION
+        || (request.entries.is_null() && request.entries_count != 0)
+    {
+        return None;
+    }
+    let table = u8::try_from(request.table).ok()?;
+    let age_group = match request.age_group {
+        0 => TaxAgeGroup::Under66AtYearStart,
+        1 => TaxAgeGroup::AtLeast66AtYearStart,
+        _ => return None,
+    };
+    let source_entries = if request.entries_count == 0 {
+        &[]
+    } else {
+        // SAFETY: The request contract requires entries_count readable values.
+        unsafe { slice::from_raw_parts(request.entries, request.entries_count) }
+    };
+    let entries: Option<Vec<_>> = source_entries
+        .iter()
+        .copied()
+        .map(SwedishTaxIncomeEntry::into_core)
+        .collect();
+    let mut plan = IncomePlan::with_annual_salary(0);
+    plan.entries = entries?;
+    plan.adjustment_percent = request.adjustment_percent.into_option();
+    plan.dividend_allowance = request.dividend_allowance.into_core();
+    Some((table, age_group, plan))
 }
 
 #[unsafe(no_mangle)]
@@ -590,7 +686,7 @@ mod tests {
                 end: SwedishTaxDate { month: 10, day: 18 },
                 use_annual_daily_rate_for_partial_months: 1,
                 payer_role: 0,
-                own_company_sourced: 0,
+                own_company_sourced: 1,
                 adjustment_applies: 0,
                 use_full_year_projection_as_adjustment_basis: 0,
                 additional_withholding_per_payment: none(),
@@ -667,9 +763,9 @@ mod tests {
                 spouse_ownership_basis_points: 0,
                 company_cash_payroll_2026: 0,
                 highest_related_cash_salary_2026: 0,
-                acquisition_cost: 0,
-                acquisition_cost_interest_basis_points: none(),
-                saved_allowance: 0,
+                acquisition_cost: 200_000,
+                acquisition_cost_interest_basis_points: some(1_155),
+                saved_allowance: 50_000,
             },
         };
 
@@ -679,6 +775,19 @@ mod tests {
         assert_eq!(result.salary_exchange_sacrifice, 211_000);
         assert_eq!(result.salary_exchange_pension_contributions, 223_238);
         unsafe { swedish_tax_calculation_result_free(result) };
+
+        let allowance = unsafe { swedish_tax_dividend_allowance_for_plan(&request) };
+        assert_eq!(allowance.status, STATUS_OK);
+        assert_eq!(allowance.issue_kind, 0);
+        assert_eq!(allowance.owner_cash_salary, 985_036);
+        assert_eq!(allowance.acquisition_cost_interest_basis, 100_000);
+        assert_eq!(allowance.acquisition_cost_interest, 11_550);
+        assert_eq!(allowance.saved_allowance, 50_000);
+        assert_eq!(allowance.tax_at_twenty_percent, allowance.total / 5);
+        assert_eq!(
+            allowance.net_after_twenty_percent_tax,
+            allowance.total - allowance.tax_at_twenty_percent
+        );
     }
 
     #[test]
