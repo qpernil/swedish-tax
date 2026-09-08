@@ -1,0 +1,242 @@
+{
+  "request": {
+    "age_group": "Under66AtYearStart",
+    "plan": {
+      "adjustment_percent": null,
+      "dividend_allowance": {
+        "acquisition_cost": 0,
+        "acquisition_cost_interest_basis_points": null,
+        "company_cash_payroll_2026": 0,
+        "highest_related_cash_salary_2026": 0,
+        "one_person_company": true,
+        "other_qualified_ownership_basis_points": 0,
+        "ownership_basis_points": 10000,
+        "saved_allowance": 0,
+        "spouse_ownership_basis_points": 0
+      },
+      "entries": [
+        {
+          "actual_withholding": null,
+          "additional_withholding_per_payment": null,
+          "adjustment_applies": false,
+          "amount": 4294967295,
+          "description": "Ordinary income",
+          "end": {
+            "day": 31,
+            "month": 12
+          },
+          "id": 1,
+          "included_in_pension_salary_basis": true,
+          "kind": "MonthlySalary",
+          "own_company_sourced": false,
+          "payer_role": "Main",
+          "regular_pension_premium": {
+            "monthly_override": null
+          },
+          "salary_exchange": null,
+          "start": {
+            "day": 1,
+            "month": 1
+          },
+          "use_annual_daily_rate_for_partial_months": false,
+          "use_full_year_projection_as_adjustment_basis": false,
+          "vacation_compensation": null
+        },
+        {
+          "actual_withholding": null,
+          "additional_withholding_per_payment": null,
+          "adjustment_applies": false,
+          "amount": 4294967295,
+          "description": "",
+          "end": {
+            "day": 31,
+            "month": 12
+          },
+          "id": 2,
+          "included_in_pension_salary_basis": true,
+          "kind": "OneTimeSalary",
+          "own_company_sourced": false,
+          "payer_role": "Main",
+          "regular_pension_premium": null,
+          "salary_exchange": {
+            "employer_adds_uplift": true,
+            "pension_and_insurance_costs_before_exchange": null,
+            "previous_year_pension_salary_basis": null,
+            "sacrificed_salary": 4294967295,
+            "uplift_basis_points": 576
+          },
+          "start": {
+            "day": 1,
+            "month": 1
+          },
+          "use_annual_daily_rate_for_partial_months": false,
+          "use_full_year_projection_as_adjustment_basis": false,
+          "vacation_compensation": null
+        }
+      ]
+    },
+    "table": 32
+  },
+  "response": {
+    "issue": {
+      "entry_id": 2,
+      "kind": "SalaryExchangeExceedsAllowance",
+      "maximum": 0
+    },
+    "result": {
+      "calculation": null,
+      "dividend": {
+        "allowance": {
+          "acquisition_cost_interest": 0,
+          "acquisition_cost_interest_basis": 0,
+          "basic_amount": 333600,
+          "company_cash_payroll": 0,
+          "joint_wage_basis": 0,
+          "joint_wage_basis_after_deduction": 0,
+          "net_after_twenty_percent_tax": 266880,
+          "owner_cash_salary": 0,
+          "saved_allowance": 0,
+          "tax_at_twenty_percent": 66720,
+          "total": 333600,
+          "wage_allowance": 0,
+          "wage_allowance_before_cap": 0,
+          "wage_cap": 0,
+          "wage_cap_salary": 0
+        },
+        "issue": null
+      },
+      "entries": [
+        {
+          "allowance": null,
+          "annual_amount": 4294967295,
+          "entry_id": 1,
+          "is_valid": true,
+          "monthly_amounts": [
+            4294967295,
+            4294967295,
+            4294967295,
+            4294967295,
+            4294967295,
+            4294967295,
+            4294967295,
+            4294967295,
+            4294967295,
+            4294967295,
+            4294967295,
+            4294967295
+          ],
+          "pension_benchmark_monthly": 1288476897,
+          "pension_salary_basis_amount": 4294967295,
+          "regular_pension_premium_amount": 4294967295,
+          "requested_additional_withholding": 0,
+          "salary_exchange_pension_contribution": 0,
+          "salary_exchange_sacrifice": 0,
+          "suggested_vacation_days": 25,
+          "total_annual_amount": 4294967295,
+          "vacation_amount_per_day": 0.0,
+          "vacation_compensation_amount": 0,
+          "vacation_pension_premium_amount": 0,
+          "withholding_payment_count": 12
+        },
+        {
+          "allowance": {
+            "available_contribution": 0,
+            "ceiling": 592000,
+            "contribution_share_of_basis": 100.0,
+            "maximum_sacrifice": 0,
+            "other_exchange_contributions": 0,
+            "pension_and_insurance_costs_before_exchange": null,
+            "pension_contributions_before": 4294967295,
+            "pension_salary_basis_after": 4294967295,
+            "pension_salary_basis_before": 4294967295,
+            "previous_year_pension_salary_basis": null,
+            "regular_pension_premiums": 4294967295,
+            "selected_exchange_contribution": 0,
+            "total_employer_pension_contributions": 4294967295,
+            "vacation_pension_premiums": 0
+          },
+          "annual_amount": 4294967295,
+          "entry_id": 2,
+          "is_valid": true,
+          "monthly_amounts": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "pension_benchmark_monthly": 0,
+          "pension_salary_basis_amount": 0,
+          "regular_pension_premium_amount": 0,
+          "requested_additional_withholding": 0,
+          "salary_exchange_pension_contribution": 4294967295,
+          "salary_exchange_sacrifice": 4294967295,
+          "suggested_vacation_days": 25,
+          "total_annual_amount": 0,
+          "vacation_amount_per_day": 0.0,
+          "vacation_compensation_amount": 0,
+          "vacation_pension_premium_amount": 0,
+          "withholding_payment_count": 1
+        }
+      ],
+      "has_uniform_monthly_table_reference": false,
+      "pension_column": 6,
+      "salary_column": 1,
+      "totals": {
+        "adjustment_basis_work_income": 0,
+        "dividend_income": 0,
+        "employer_pension_share_of_basis": 100.0,
+        "gross_income": 4294967295,
+        "monthly_taxable_income": 357913941,
+        "ordinary_income": 4294967295,
+        "pension_income": 0,
+        "pension_salary_basis": 4294967295,
+        "regular_pension_premiums": 4294967295,
+        "salary_exchange_pension_contributions": 4294967295,
+        "salary_exchange_sacrifice": 4294967295,
+        "sgi_annual_rate": 4294967295,
+        "total_employer_pension_contributions": 4294967295,
+        "vacation_pension_premiums": 0,
+        "work_income": 4294967295
+      },
+      "withholding": {
+        "entries": [
+          {
+            "additional_withheld": 0,
+            "entry_id": 1,
+            "gross": 4294967295,
+            "regular_withheld": 4294967295,
+            "rule": {
+              "column": 1,
+              "kind": "Table",
+              "percent": null
+            },
+            "supplemental_withheld": 0,
+            "withheld": 4294967295
+          },
+          {
+            "additional_withheld": 0,
+            "entry_id": 2,
+            "gross": 0,
+            "regular_withheld": 0,
+            "rule": {
+              "column": null,
+              "kind": "OneTimeTable",
+              "percent": 54
+            },
+            "supplemental_withheld": 0,
+            "withheld": 0
+          }
+        ],
+        "total": 4294967295
+      }
+    }
+  }
+}

@@ -76,3 +76,30 @@ fn basis_point_percentages_use_exact_text_conversion() {
     assert_eq!(parse_basis_points_percentage("5.123"), None);
     assert_eq!(parse_basis_points_percentage("42949673"), None);
 }
+
+#[test]
+fn unreadable_saved_state_disables_persistence() {
+    struct TestStorage(Option<String>);
+    impl eframe::Storage for TestStorage {
+        fn get_string(&self, _: &str) -> Option<String> {
+            self.0.clone()
+        }
+        fn set_string(&mut self, _: &str, value: String) {
+            self.0 = Some(value);
+        }
+        fn remove_string(&mut self, _: &str) {
+            self.0 = None;
+        }
+        fn flush(&mut self) {}
+    }
+    let malformed = TestStorage(Some("incomplete saved state".into()));
+    assert!(TaxApp::from_storage(Some(&malformed)).saved_state_unavailable);
+    assert!(!TaxApp::from_storage(Some(&TestStorage(None))).saved_state_unavailable);
+    let mut valid = TestStorage(None);
+    eframe::set_value(
+        &mut valid,
+        APP_STATE_STORAGE_KEY,
+        &PersistedAppState::default(),
+    );
+    assert!(!TaxApp::from_storage(Some(&valid)).saved_state_unavailable);
+}

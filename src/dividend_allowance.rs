@@ -9,7 +9,6 @@ pub const QUALIFIED_DIVIDEND_TAX_PERCENT: u32 = 20;
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct DividendAllowanceInputs2027 {
     /// When true, the owner's marked 2026 cash salary is the complete wage basis.
-    #[serde(default = "default_true")]
     pub one_person_company: bool,
     /// Hundredths of one percent; 10_000 means 100%.
     pub ownership_basis_points: u32,
@@ -19,15 +18,12 @@ pub struct DividendAllowanceInputs2027 {
     /// A spouse's ownership in this company, used for the mandatory joint wage calculation.
     pub spouse_ownership_basis_points: u32,
     /// Cash compensation paid by the company and qualifying subsidiaries in 2026.
-    #[serde(default, alias = "company_cash_payroll_2025")]
     pub company_cash_payroll_2026: u32,
     /// Highest 2026 cash compensation paid to a related person by the company/group.
-    #[serde(default, alias = "highest_related_cash_salary_2025")]
     pub highest_related_cash_salary_2026: u32,
     /// Acquisition cost for this owner's shares at the beginning of 2027.
     pub acquisition_cost: u32,
     /// Total 2027 interest rate: the 30 November 2026 government borrowing rate plus 9%.
-    #[serde(default)]
     pub acquisition_cost_interest_basis_points: Option<u32>,
     /// Saved dividend allowance brought into income year 2027.
     pub saved_allowance: u32,
@@ -163,10 +159,6 @@ impl DividendAllowanceInputs2027 {
             total,
         })
     }
-}
-
-const fn default_true() -> bool {
-    true
 }
 
 impl DividendAllowance2027 {

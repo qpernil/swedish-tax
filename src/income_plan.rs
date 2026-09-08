@@ -141,10 +141,6 @@ pub const DEFAULT_SALARY_EXCHANGE_UPLIFT_BASIS_POINTS: u32 = 576;
 pub const DEFAULT_VACATION_COMPENSATION_RATE_BASIS_POINTS: u32 = 540;
 pub const SECONDARY_WITHHOLDING_PERCENT: u32 = 30;
 
-const fn default_vacation_compensation_rate_basis_points() -> u32 {
-    DEFAULT_VACATION_COMPENSATION_RATE_BASIS_POINTS
-}
-
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct RegularPensionPremium {
     /// Actual monthly premium, when it differs from the benchmark calculation.
@@ -178,11 +174,9 @@ pub struct SalaryExchange {
     pub uplift_basis_points: u32,
     /// Fixed pensionable salary from the preceding tax year, when the
     /// employer uses that instead of the current-year salary basis.
-    #[serde(default)]
     pub previous_year_pension_salary_basis: Option<u32>,
     /// Actual employer pension and insurance costs already counted against
     /// the 35% allowance before this salary exchange.
-    #[serde(default)]
     pub pension_and_insurance_costs_before_exchange: Option<u32>,
 }
 
@@ -267,12 +261,10 @@ pub struct IncomeEntry {
     pub end: Date2026,
     /// Use monthly amount × 12 / 365 for a partial first or last month.
     /// The default instead divides by the calendar days in that month.
-    #[serde(default)]
     pub use_annual_daily_rate_for_partial_months: bool,
     pub payer_role: PayerRole,
     /// Whether this cash salary is paid by the owner's company or qualifying group.
     /// For 2026 income rows it feeds the following year's 3:12 wage basis.
-    #[serde(default)]
     pub own_company_sourced: bool,
     pub adjustment_applies: bool,
     /// Use this recurring salary's full-year projection as the income basis
@@ -282,7 +274,6 @@ pub struct IncomeEntry {
     pub additional_withholding_per_payment: Option<u32>,
     /// Total tax actually withheld for this income row. When present, this
     /// takes precedence over every estimated withholding rule.
-    #[serde(default)]
     pub actual_withholding: Option<u32>,
     pub vacation_compensation: Option<VacationCompensation>,
     pub regular_pension_premium: Option<RegularPensionPremium>,
@@ -603,7 +594,6 @@ pub struct VacationCompensation {
     pub annual_entitlement_days: u32,
     pub payout_days: u32,
     /// Hundredths of one percent of monthly salary per day; 540 means 5.4%.
-    #[serde(default = "default_vacation_compensation_rate_basis_points")]
     pub rate_basis_points: u32,
     pub included_in_pension_salary_basis: bool,
     /// Actual one-time employer premium attributable to the vacation payout.
@@ -658,7 +648,6 @@ impl VacationCompensation {
 pub struct IncomePlan {
     pub entries: Vec<IncomeEntry>,
     pub adjustment_percent: Option<u32>,
-    #[serde(default)]
     pub dividend_allowance: DividendAllowanceInputs2027,
     next_id: u64,
 }

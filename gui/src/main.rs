@@ -37,6 +37,7 @@ struct TaxApp {
     income_editor_open: bool,
     calculation_trace_open: bool,
     selected_income_entry: Option<u64>,
+    saved_state_unavailable: bool,
 }
 
 impl Default for TaxApp {
@@ -48,14 +49,22 @@ impl Default for TaxApp {
 impl TaxApp {
     fn new(context: &eframe::CreationContext<'_>) -> Self {
         configure_style(&context.egui_ctx);
-        context
-            .storage
-            .and_then(|storage| {
-                eframe::get_value::<PersistedAppState>(storage, APP_STATE_STORAGE_KEY)
-            })
+        Self::from_storage(context.storage)
+    }
+
+    fn from_storage(storage: Option<&dyn eframe::Storage>) -> Self {
+        let Some(storage) = storage else {
+            return Self::default();
+        };
+        match eframe::get_value::<PersistedAppState>(storage, APP_STATE_STORAGE_KEY)
             .filter(PersistedAppState::is_supported)
-            .map(Self::from_persisted_state)
-            .unwrap_or_default()
+        {
+            Some(state) => Self::from_persisted_state(state),
+            None => Self {
+                saved_state_unavailable: storage.get_string(APP_STATE_STORAGE_KEY).is_some(),
+                ..Self::default()
+            },
+        }
     }
 
     fn from_persisted_state(state: PersistedAppState) -> Self {
@@ -66,6 +75,7 @@ impl TaxApp {
             income_plan: state.income_plan,
             income_editor_open: false,
             calculation_trace_open: false,
+            saved_state_unavailable: false,
         }
     }
 
@@ -699,6 +709,9 @@ impl eframe::App for TaxApp {
                     });
                     ui.add_space(18.0);
 
+                    if self.saved_state_unavailable {
+                        ui.label("The saved plan could not be read. Its data is preserved; changes in this session cannot be saved.");
+                    }
                     self.controls(ui);
                     if let Some(calculation) =
                         Calculation::new(self.table, self.age_group, &self.income_plan)
@@ -730,7 +743,8 @@ impl eframe::App for TaxApp {
         self.income_editor(ui.ctx());
 
         let state_after_edit = self.persisted_state();
-        if state_after_edit != state_before_edit
+        if !self.saved_state_unavailable
+            && state_after_edit != state_before_edit
             && let Some(storage) = frame.storage_mut()
         {
             eframe::set_value(storage, APP_STATE_STORAGE_KEY, &state_after_edit);

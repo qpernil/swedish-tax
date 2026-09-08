@@ -22,7 +22,7 @@ mod income_bases;
 mod income_plan;
 mod withholding;
 
-pub use app_state::{PERSISTED_APP_STATE_VERSION, PersistedAppState};
+pub use app_state::PersistedAppState;
 pub use calculation::{
     AdjustmentBalanceTrace, AdjustmentCalibration, Calculation, DEFAULT_MONTHLY_INCOME,
     DIVIDEND_TAX_PERCENT, TaxBalance,

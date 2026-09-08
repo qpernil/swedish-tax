@@ -61,11 +61,14 @@ cargo run -p swedish-tax-gui
 The GUI is a separate workspace package. A normal `cargo build` from the
 repository root builds both the core/CLI package and the graphical application.
 
-## iOS bridge
+The GUI saves the current plan model without schema version markers or migrations.
+If saved data cannot be read, it is preserved and saving is disabled for that session.
 
-The `swedish-tax-ios` workspace crate exposes the tax core through a versioned,
-typed C ABI. Build ARM64 device and Apple Silicon simulator slices and package
-them as an XCFramework with:
+## Shared C interface and iOS build
+
+The `swedish-tax-ios` workspace crate exposes the tax core through a typed C ABI.
+Build ARM64 device and Apple Silicon simulator slices and package them as an
+XCFramework with:
 
 ```sh
 rustup target add aarch64-apple-ios aarch64-apple-ios-sim
@@ -81,6 +84,44 @@ The default artifact is `target/ios/SwedishTaxCore.xcframework`. The iOS Xcode
 project consumes that location through its persisted
 `RUST_CORE_ARTIFACTS_DIR` build setting; `--output PATH` remains available for
 other consumers and packaging workflows.
+
+The same C ABI powers the
+[Blazor calculator](https://github.com/qpernil/swedish-tax-aspnet).
+It compiles this crate as an Emscripten static library and links it
+into the browser's .NET WebAssembly runtime. C# calls generated P/Invoke
+declarations, with all 10 functions, 21 structures and result cleanup covered by
+native/browser tests. The editor interface returns structured validation,
+invalid-plan totals, row/monthly amounts, vacation/pension details, exchange allowance
+previews and policy defaults. Both clients map these Rust results; the saved exchange
+request remains unchanged when its preview is limited to the permitted maximum.
+See [the editor API contract](docs/ffi-plan-support.md).
+The browser build pins its compiler configuration and uses abort-on-panic
+behavior. Its supported build and ownership contract are described in the
+[consumer engine guide](https://github.com/qpernil/swedish-tax-aspnet/blob/master/docs/rust-engine.md).
+The iOS artifact and build workflow use the XCFramework described above.
+
+The C interface supports the current generated header only. Rebuild consumers and
+the Rust library together when its types or exports change.
+
+## Shared test fixtures
+
+`tests/fixtures` contains 17 checked-in input plans and expected results generated
+directly from the Rust core. They verify client mappings for ordinary and mixed income,
+proration, vacation, pensions, salary exchange, dividends and invalid inputs.
+Generate or check them with the native developer tool:
+
+```sh
+cargo xtask fixtures
+cargo xtask fixtures --check
+```
+
+The Blazor repository checks in exact copies for its native and browser tests;
+its native-engine build rejects any difference from the pinned provider. Its
+production calculations call the shared C ABI through P/Invoke, with the Rust
+library compiled to WebAssembly and linked into the .NET runtime. The fixture
+JSON is test data, independent of that compilation target.
+See [the shared fixture guide](docs/shared-fixtures.md) for generation, schema
+validation and consumer synchronization.
 
 ## Sources
 

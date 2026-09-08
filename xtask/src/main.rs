@@ -6,6 +6,8 @@ use std::{
     process::{Command, ExitCode},
 };
 
+mod fixtures;
+
 const DEVICE_TARGET: &str = "aarch64-apple-ios";
 const SIMULATOR_TARGET: &str = "aarch64-apple-ios-sim";
 const LIBRARY_NAME: &str = "libswedish_tax_ios.a";
@@ -25,6 +27,20 @@ fn run() -> Result<(), String> {
     let Some(command) = arguments.next() else {
         return Err(usage());
     };
+    if command == "fixtures" {
+        let mut check = false;
+        for argument in arguments {
+            if argument == "--check" && !check {
+                check = true;
+            } else {
+                return Err(usage());
+            }
+        }
+        return fixtures::run(
+            Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap(),
+            check,
+        );
+    }
     if command != "ios" {
         return Err(format!("unknown command {command:?}\n{}", usage()));
     }
@@ -167,7 +183,8 @@ fn absolute_path(workspace: &Path, path: &Path) -> PathBuf {
 }
 
 fn usage() -> String {
-    "usage: cargo xtask ios [--release] [--output PATH]".to_owned()
+    "usage: cargo xtask ios [--release] [--output PATH]\n       cargo xtask fixtures [--check]"
+        .to_owned()
 }
 
 #[cfg(test)]

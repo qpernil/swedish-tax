@@ -174,7 +174,6 @@ typedef struct SwedishTaxDividendAllowanceInputs {
 } SwedishTaxDividendAllowanceInputs;
 
 typedef struct SwedishTaxPlanRequest {
-  uint32_t version;
   uint32_t table;
   uint32_t age_group;
   const struct SwedishTaxIncomeEntry *entries;
@@ -203,6 +202,105 @@ typedef struct SwedishTaxDividendAllowanceResult {
   uint32_t net_after_twenty_percent_tax;
 } SwedishTaxDividendAllowanceResult;
 
+typedef struct SwedishTaxPlanTotals {
+  uint32_t work_income;
+  uint32_t pension_income;
+  uint32_t dividend_income;
+  uint32_t sgi_annual_rate;
+  uint32_t adjustment_basis_work_income;
+  uint32_t pension_salary_basis;
+  uint32_t regular_pension_premiums;
+  uint32_t vacation_pension_premiums;
+  uint32_t salary_exchange_sacrifice;
+  uint32_t salary_exchange_pension_contributions;
+  uint32_t ordinary_income;
+  uint32_t monthly_taxable_income;
+  uint32_t gross_income;
+  uint32_t total_employer_pension_contributions;
+  double employer_pension_share_of_basis;
+} SwedishTaxPlanTotals;
+
+// January through December; non-monthly entries return zero in every month.
+typedef struct SwedishTaxMonthlyAmounts {
+  uint32_t january;
+  uint32_t february;
+  uint32_t march;
+  uint32_t april;
+  uint32_t may;
+  uint32_t june;
+  uint32_t july;
+  uint32_t august;
+  uint32_t september;
+  uint32_t october;
+  uint32_t november;
+  uint32_t december;
+} SwedishTaxMonthlyAmounts;
+
+// Preview uses min(requested sacrifice, maximum_sacrifice); saved inputs and plan totals are unchanged.
+typedef struct SwedishTaxExchangeAllowance {
+  uint32_t ceiling;
+  uint32_t pension_salary_basis_before;
+  uint32_t pension_salary_basis_after;
+  struct SwedishTaxOptionalU32 previous_year_pension_salary_basis;
+  struct SwedishTaxOptionalU32 pension_and_insurance_costs_before_exchange;
+  uint32_t pension_contributions_before;
+  uint32_t regular_pension_premiums;
+  uint32_t vacation_pension_premiums;
+  uint32_t other_exchange_contributions;
+  uint32_t selected_exchange_contribution;
+  uint32_t total_employer_pension_contributions;
+  uint32_t available_contribution;
+  uint32_t maximum_sacrifice;
+  double contribution_share_of_basis;
+} SwedishTaxExchangeAllowance;
+
+typedef struct SwedishTaxEntrySupport {
+  uint32_t status;
+  uint64_t entry_id;
+  uint32_t annual_amount;
+  uint32_t total_annual_amount;
+  uint32_t withholding_payment_count;
+  uint32_t requested_additional_withholding;
+  uint32_t vacation_compensation_amount;
+  uint32_t regular_pension_premium_amount;
+  uint32_t vacation_pension_premium_amount;
+  uint32_t salary_exchange_sacrifice;
+  uint32_t salary_exchange_pension_contribution;
+  uint32_t pension_salary_basis_amount;
+  uint32_t full_year_adjustment_basis_amount;
+  uint32_t is_valid;
+  uint32_t pension_benchmark_monthly;
+  uint32_t suggested_vacation_days;
+  double vacation_amount_per_day;
+  struct SwedishTaxMonthlyAmounts monthly_amounts;
+  uint32_t has_allowance;
+  struct SwedishTaxExchangeAllowance allowance;
+} SwedishTaxEntrySupport;
+
+// issue_kind: 0 none, 1 invalid payment period, 2 exchange exceeds allowance. ID/maximum are meaningful only for their issue.
+typedef struct SwedishTaxPlanSupport {
+  uint32_t status;
+  uint32_t issue_kind;
+  uint64_t issue_entry_id;
+  uint32_t issue_maximum;
+  struct SwedishTaxPlanTotals totals;
+  uint32_t has_uniform_monthly_table_reference;
+  uint32_t salary_column;
+  uint32_t pension_column;
+  struct SwedishTaxEntrySupport *entries;
+  size_t entries_count;
+  size_t entries_capacity;
+} SwedishTaxPlanSupport;
+
+// Policy defaults for new editor values. Existing saved values remain explicit inputs.
+typedef struct SwedishTaxPlanningPolicy {
+  uint32_t regular_pension_monthly_threshold;
+  uint32_t default_vacation_rate_basis_points;
+  uint32_t default_exchange_uplift_basis_points;
+  uint32_t employer_pension_allowance_maximum;
+  uint32_t acquisition_cost_threshold;
+} SwedishTaxPlanningPolicy;
+
 #ifdef __cplusplus
 extern "C" {
 #endif // __cplusplus
@@ -224,13 +322,32 @@ struct SwedishTaxAnnualTaxResult swedish_tax_annual_tax_for_income_profile(uint3
                                                                            uint32_t work_income,
                                                                            uint32_t pension_income);
 
-uint32_t swedish_tax_contract_version(void);
-
 struct SwedishTaxCalculationResult swedish_tax_calculate_plan(const struct SwedishTaxPlanRequest *request);
 
 struct SwedishTaxDividendAllowanceResult swedish_tax_dividend_allowance_for_plan(const struct SwedishTaxPlanRequest *request);
 
 void swedish_tax_calculation_result_free(struct SwedishTaxCalculationResult result);
+
+// Editor details remain available for invalid payment periods and excessive exchanges.
+// status describes request decoding, independently of issue_kind. Totals retain requested
+// inputs (entry sacrifice is bounded by its payment); allowance previews use the permitted
+// maximum. Rows follow input order. IDs must be unique within a plan.
+//
+// Ownership: request and entries must be aligned, readable and immutable until return.
+// Returned entries are Rust-owned; copy before freeing. Return the original result exactly
+// once to swedish_tax_plan_support_free, including on error. Never alter pointer/count/
+// capacity, free with another allocator, or use a returned pointer after free.
+// Build consumers against the matching generated header and Rust library.
+struct SwedishTaxPlanSupport swedish_tax_plan_support(const struct SwedishTaxPlanRequest *request);
+
+// Returns the original support allocation to Rust exactly once. A zero/error result is safe.
+void swedish_tax_plan_support_free(struct SwedishTaxPlanSupport result);
+
+// Allocation-free entry preview for editors. No plan-level allowance is returned.
+// A null or undecodable entry returns INVALID_INPUT. The input is borrowed until return.
+struct SwedishTaxEntrySupport swedish_tax_entry_support(const struct SwedishTaxIncomeEntry *entry);
+
+struct SwedishTaxPlanningPolicy swedish_tax_planning_policy(void);
 
 #ifdef __cplusplus
 }  // extern "C"

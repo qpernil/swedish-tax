@@ -9,13 +9,22 @@ use swedish_tax::{
 
 use super::{STATUS_INTERNAL_ERROR, STATUS_INVALID_INPUT, STATUS_OK, SwedishTaxAnnualTaxResult};
 
-const CONTRACT_VERSION: u32 = 2;
+mod support;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 #[repr(C)]
 pub struct SwedishTaxOptionalU32 {
     pub is_some: u32,
     pub value: u32,
+}
+
+impl From<Option<u32>> for SwedishTaxOptionalU32 {
+    fn from(value: Option<u32>) -> Self {
+        Self {
+            is_some: value.is_some() as u32,
+            value: value.unwrap_or(0),
+        }
+    }
 }
 
 impl SwedishTaxOptionalU32 {
@@ -282,7 +291,6 @@ impl SwedishTaxDividendAllowanceResult {
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub struct SwedishTaxPlanRequest {
-    pub version: u32,
     pub table: u32,
     pub age_group: u32,
     pub entries: *const SwedishTaxIncomeEntry,
@@ -430,11 +438,6 @@ impl SwedishTaxCalculationResult {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn swedish_tax_contract_version() -> u32 {
-    CONTRACT_VERSION
-}
-
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn swedish_tax_calculate_plan(
     request: *const SwedishTaxPlanRequest,
 ) -> SwedishTaxCalculationResult {
@@ -551,9 +554,7 @@ fn calculate(request: SwedishTaxPlanRequest) -> Option<SwedishTaxCalculationResu
 }
 
 fn plan_from_request(request: SwedishTaxPlanRequest) -> Option<(u8, TaxAgeGroup, IncomePlan)> {
-    if request.version != CONTRACT_VERSION
-        || (request.entries.is_null() && request.entries_count != 0)
-    {
+    if request.entries.is_null() && request.entries_count != 0 {
         return None;
     }
     let table = u8::try_from(request.table).ok()?;
@@ -649,7 +650,6 @@ mod tests {
             included_in_pension_salary_basis: 1,
         }];
         let request = SwedishTaxPlanRequest {
-            version: CONTRACT_VERSION,
             table: 32,
             age_group: 0,
             entries: entries.as_ptr(),
@@ -676,7 +676,7 @@ mod tests {
     }
 
     #[test]
-    fn contract_version_two_maps_non_default_planning_fields() {
+    fn request_maps_non_default_planning_fields() {
         let entries = [
             SwedishTaxIncomeEntry {
                 id: 1,
@@ -750,7 +750,6 @@ mod tests {
             },
         ];
         let request = SwedishTaxPlanRequest {
-            version: CONTRACT_VERSION,
             table: 32,
             age_group: 0,
             entries: entries.as_ptr(),
