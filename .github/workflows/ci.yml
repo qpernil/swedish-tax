@@ -29,6 +29,22 @@ jobs:
       - name: Run tests
         run: cargo test --workspace
 
+  wasm:
+    name: WebAssembly C library
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.98.1
+        with:
+          components: rust-src
+          targets: wasm32-unknown-emscripten
+      - name: Build the shared C library for WebAssembly
+        run: cargo xtask wasm --release
+        env:
+          RUSTUP_TOOLCHAIN: "1.98.1"
+      - name: Verify the generated header is current
+        run: git diff --exit-code -- ios-ffi/include/SwedishTaxFFI.h
+
   msrv:
     name: Minimum Rust 1.94
     runs-on: ubuntu-latest

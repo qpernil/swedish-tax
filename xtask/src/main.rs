@@ -7,6 +7,7 @@ use std::{
 };
 
 mod fixtures;
+mod wasm;
 
 const DEVICE_TARGET: &str = "aarch64-apple-ios";
 const SIMULATOR_TARGET: &str = "aarch64-apple-ios-sim";
@@ -27,6 +28,12 @@ fn run() -> Result<(), String> {
     let Some(command) = arguments.next() else {
         return Err(usage());
     };
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("xtask is inside the workspace");
+    if command == "wasm" {
+        return wasm::run(workspace, arguments);
+    }
     if command == "fixtures" {
         let mut check = false;
         for argument in arguments {
@@ -36,18 +43,12 @@ fn run() -> Result<(), String> {
                 return Err(usage());
             }
         }
-        return fixtures::run(
-            Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap(),
-            check,
-        );
+        return fixtures::run(workspace, check);
     }
     if command != "ios" {
         return Err(format!("unknown command {command:?}\n{}", usage()));
     }
 
-    let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("xtask is inside the workspace");
     let mut release = false;
     let mut output = workspace
         .join("target")
@@ -141,7 +142,7 @@ fn rendered_c_header(workspace: &Path) -> Result<Vec<u8>, String> {
         .with_crate(workspace.join("ios-ffi"))
         .with_config(config)
         .generate()
-        .map_err(|error| format!("failed to generate the iOS C header: {error}"))?;
+        .map_err(|error| format!("failed to generate the shared C header: {error}"))?;
     let mut output = Vec::new();
     bindings.write(&mut output);
     Ok(output)
@@ -183,7 +184,7 @@ fn absolute_path(workspace: &Path, path: &Path) -> PathBuf {
 }
 
 fn usage() -> String {
-    "usage: cargo xtask ios [--release] [--output PATH]\n       cargo xtask fixtures [--check]"
+    "usage: cargo xtask ios [--release] [--output PATH]\n       cargo xtask wasm [--release] [--output DIRECTORY] [--target-dir DIRECTORY] [--rustflags FLAGS]\n       cargo xtask fixtures [--check]"
         .to_owned()
 }
 
@@ -205,7 +206,7 @@ mod tests {
         assert_eq!(
             actual,
             expected,
-            "{} is stale; run `cargo xtask ios`",
+            "{} is stale; run `cargo xtask ios` or `cargo xtask wasm`",
             header.display()
         );
     }

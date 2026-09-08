@@ -85,11 +85,37 @@ project consumes that location through its persisted
 `RUST_CORE_ARTIFACTS_DIR` build setting; `--output PATH` remains available for
 other consumers and packaging workflows.
 
+## WebAssembly C library
+
+Compile the same C interface for the browser with:
+
+```sh
+rustup toolchain install 1.98.1 --component rust-src --target wasm32-unknown-emscripten
+RUSTUP_TOOLCHAIN=1.98.1 cargo xtask wasm --release
+```
+
+The task regenerates the shared C header and produces
+`target/wasm/libswedish_tax_ios.a` and `target/wasm/SwedishTaxFFI.h`. It builds a
+static library for `wasm32-unknown-emscripten`; the consuming .NET application
+links that library into its runtime with `dotnet publish`.
+
+`--output DIRECTORY` selects the output directory. `--target-dir DIRECTORY`
+selects Cargo's build cache, otherwise `CARGO_TARGET_DIR` or the workspace's
+`target` directory is used. The default output is `wasm` under that build cache.
+Relative paths resolve from the Rust workspace. Omit `--release` for a debug build.
+
+The default compiler flags are the configuration verified with .NET SDK 10.0.301:
+`-C panic=abort -C target-cpu=mvp -C target-feature=-bulk-memory-opt,-call-indirect-overlong`.
+`--rustflags FLAGS` replaces that preset so a consumer can supply its pinned settings.
+The task rebuilds Rust's standard library with `-Z build-std=std,panic_abort` and
+scopes `RUSTC_BOOTSTRAP=1` to the target build. Rust warns that the LLVM feature
+flags are unstable. Compiler changes require browser parity verification.
+
 The same C ABI powers the
 [Blazor calculator](https://github.com/qpernil/swedish-tax-aspnet).
-It compiles this crate as an Emscripten static library and links it
-into the browser's .NET WebAssembly runtime. C# calls generated P/Invoke
-declarations, with all 10 functions, 21 structures and result cleanup covered by
+Its build script verifies the provider pin, generated declarations and fixture
+copies, invokes `cargo xtask wasm`, and supplies the library to the .NET linker.
+C# calls generated P/Invoke declarations, with all 10 functions, 21 structures and result cleanup covered by
 native/browser tests. The editor interface returns structured validation,
 invalid-plan totals, row/monthly amounts, vacation/pension details, exchange allowance
 previews and policy defaults. Both clients map these Rust results; the saved exchange
