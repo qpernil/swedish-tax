@@ -2,8 +2,9 @@
 
 ## Development setup
 
-Install Rust 1.95.0. The repository toolchain file also installs
-`rustfmt` and Clippy automatically.
+Rust 1.95.0 is the minimum supported version. The repository toolchain file
+selects stable Rust and installs `rustfmt` and Clippy automatically. The verified
+WebAssembly build uses Rust 1.98.1 as described below.
 
 Run the desktop application with:
 
