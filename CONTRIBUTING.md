@@ -2,7 +2,7 @@
 
 ## Development setup
 
-Install the stable Rust toolchain. The repository toolchain file also installs
+Install Rust 1.95.0. The repository toolchain file also installs
 `rustfmt` and Clippy automatically.
 
 Run the desktop application with:
@@ -24,8 +24,8 @@ cargo test --workspace
 CI also checks the minimum supported Rust toolchain:
 
 ```sh
-rustup toolchain install 1.94.0
-cargo +1.94.0 check --workspace --all-targets
+rustup toolchain install 1.95.0
+cargo +1.95.0 check --workspace --all-targets
 ```
 
 Tax formulas and thresholds should cite an authoritative source in code or in

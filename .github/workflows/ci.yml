@@ -46,17 +46,17 @@ jobs:
         run: git diff --exit-code -- ios-ffi/include/SwedishTaxFFI.h
 
   msrv:
-    name: Minimum Rust 1.94
+    name: Minimum Rust 1.95.0
     runs-on: ubuntu-latest
     env:
-      RUSTUP_TOOLCHAIN: "1.94"
+      RUSTUP_TOOLCHAIN: "1.95.0"
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
 
       - name: Install minimum supported Rust
-        uses: dtolnay/rust-toolchain@1.94
+        uses: dtolnay/rust-toolchain@1.95.0
 
       - name: Check workspace
         run: cargo check --workspace --all-targets
