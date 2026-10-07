@@ -3,8 +3,8 @@
 ## Development setup
 
 Rust 1.95.0 is the minimum supported version. The repository toolchain file
-selects stable Rust and installs `rustfmt` and Clippy automatically. The verified
-WebAssembly build uses Rust 1.98.1 as described below.
+selects stable Rust and installs `rustfmt` and Clippy automatically. The
+WebAssembly build uses the same stable channel as described below.
 
 Run the desktop application with:
 
@@ -32,7 +32,7 @@ cargo +1.95.0 check --workspace --all-targets
 Tax formulas and thresholds should cite an authoritative source in code or in
 the README. Changes to the shared C ABI must regenerate and commit
 `ios-ffi/include/SwedishTaxFFI.h` with `cargo xtask ios --release` or
-`cargo xtask wasm --release`. The latter needs Rust 1.98.1 with `rust-src` and
+`cargo xtask wasm --release`. The latter needs stable Rust with `rust-src` and
 the `wasm32-unknown-emscripten` target for the verified browser configuration.
 Provider CI builds the WebAssembly C library directly with that toolchain.
 

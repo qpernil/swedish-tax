@@ -34,14 +34,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: dtolnay/rust-toolchain@stable
         with:
           components: rust-src
           targets: wasm32-unknown-emscripten
       - name: Build the shared C library for WebAssembly
         run: cargo xtask wasm --release
         env:
-          RUSTUP_TOOLCHAIN: "1.98.1"
+          RUSTUP_TOOLCHAIN: "stable"
       - name: Verify the generated header is current
         run: git diff --exit-code -- ios-ffi/include/SwedishTaxFFI.h
 

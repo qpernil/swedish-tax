@@ -90,8 +90,8 @@ other consumers and packaging workflows.
 Compile the same C interface for the browser with:
 
 ```sh
-rustup toolchain install 1.98.1 --component rust-src --target wasm32-unknown-emscripten
-RUSTUP_TOOLCHAIN=1.98.1 cargo xtask wasm --release
+rustup toolchain install stable --component rust-src --target wasm32-unknown-emscripten
+RUSTUP_TOOLCHAIN=stable cargo xtask wasm --release
 ```
 
 The task regenerates the shared C header and produces
