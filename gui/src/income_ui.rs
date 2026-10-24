@@ -1366,7 +1366,7 @@ pub(super) fn exact_basis_points_percentage_editor(
             [74.0, 26.0],
             egui::TextEdit::singleline(&mut text)
                 .id(editor_id)
-                .horizontal_align(egui::Align::RIGHT),
+                .align(egui::Align2::RIGHT_TOP),
         );
         if response.changed() {
             text = sanitize_percentage_text(&text);
