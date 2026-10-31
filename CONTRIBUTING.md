@@ -18,15 +18,18 @@ Run the same checks as CI:
 
 ```sh
 cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+cargo clippy --locked --workspace --all-targets -- -D warnings
+cargo test --locked --workspace
 ```
+
+The workspace commits `Cargo.lock`. CI requires that resolution with `--locked`;
+update dependencies deliberately with `cargo update` and review the lockfile diff.
 
 CI also checks the minimum supported Rust toolchain:
 
 ```sh
 rustup toolchain install 1.95.0
-cargo +1.95.0 check --workspace --all-targets
+cargo +1.95.0 check --locked --workspace --all-targets
 ```
 
 Tax formulas and thresholds should cite an authoritative source in code or in
@@ -38,7 +41,7 @@ Provider CI builds the WebAssembly C library directly with that toolchain.
 
 Shared calculation or client result-schema changes must update the fixtures with
 `cargo xtask fixtures` and pass `cargo xtask fixtures --check`. The fixture
-generator runs natively; `cargo test --workspace` checks the complete fixture set.
+generator runs natively; `cargo test --locked --workspace` checks the complete fixture set.
 For a shared C API change, commit the provider first. In the canonical
 `swedish-tax-aspnet` checkout, update `native-engine.json`, regenerate P/Invoke
 declarations, synchronize the reference fixtures and rebuild the native libraries.
