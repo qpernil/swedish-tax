@@ -1,0 +1,9 @@
+# Existing Swedish Tax dependencies requiring licenses outside the shared baseline.
+exceptions = [
+    # C header generation in the development-only xtask.
+    { crate = "cbindgen", allow = ["MPL-2.0"] },
+    # Font assets bundled with the desktop egui application.
+    { crate = "epaint_default_fonts", allow = ["OFL-1.1", "Ubuntu-font-1.0"] },
+    # Hash-table implementation used by the GUI and build tooling.
+    { crate = "foldhash", allow = ["Zlib"] },
+]

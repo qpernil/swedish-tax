@@ -25,6 +25,14 @@ cargo test --locked --workspace
 The workspace commits `Cargo.lock`. CI requires that resolution with `--locked`;
 update dependencies deliberately with `cargo update` and review the lockfile diff.
 
+The shared dependency checker lives in the sibling `pkcs11rs` checkout. From
+that checkout, run `cargo xtask deps --manifest-path ../swedish-tax/Cargo.toml`,
+or use `cargo xtask deps --all` to include the other known Rust projects.
+`deny.exceptions.toml` records crate-specific license exceptions for the existing
+C header generator, desktop font assets, and hash-table dependency. The checker
+uses the shared base policy and automatically reads these local exceptions;
+advisory checks remain enabled. Checks leave manifests and lockfiles unchanged.
+
 CI also checks the minimum supported Rust toolchain:
 
 ```sh
