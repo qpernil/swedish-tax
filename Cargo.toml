@@ -6,7 +6,6 @@ rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-homepage.workspace = true
 description = "Swedish preliminary tax calculations for income year 2026"
 readme = "README.md"
 
@@ -31,4 +30,3 @@ rust-version = "1.95"
 authors = ["Per Nilsson"]
 license = "MIT"
 repository = "https://github.com/qpernil/swedish-tax"
-homepage = "https://github.com/qpernil/swedish-tax"
